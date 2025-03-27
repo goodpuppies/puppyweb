@@ -24,27 +24,37 @@ async function startWebSocketServer(port: number) {
       socket.addEventListener("message", (event) => {
         // Process incoming frame data from WebSocket
         try {
-          const base64Data = event.data as string;
-          // Convert base64 to binary
-          const binaryData = base64ToUint8Array(base64Data);
-          
-          // Create a frame object similar to what we had with TCP
-          const frameStart = performance.now();
-          const receiveTime = performance.now() - frameStart;
-          
-          // Extract width and height from the image data
-          // For simplicity, we'll use fixed dimensions for now
-          // In a real implementation, you might want to send this as metadata
-          const width = 256;
-          const height = 256;
-          
-          worker.postMessage({ 
-            type: 'frame', 
-            data: binaryData,
-            width: width,
-            height: height,
-            receiveTime 
-          });
+          // Handle binary data
+          if (event.data instanceof ArrayBuffer) {
+            const frameStart = performance.now();
+            const buffer = new Uint8Array(event.data);
+            
+            // Parse metadata (first 16 bytes: width, height, size, chunks)
+            const metadataView = new DataView(buffer.buffer, buffer.byteOffset, 16);
+            const width = metadataView.getUint32(0, true);
+            const height = metadataView.getUint32(4, true);
+            const totalSize = metadataView.getUint32(8, true);
+            const numChunks = metadataView.getUint32(12, true);
+            
+            // Parse chunk size (next 4 bytes)
+            const chunkSizeView = new DataView(buffer.buffer, buffer.byteOffset + 16, 4);
+            const chunkSize = chunkSizeView.getUint32(0, true);
+            
+            // Extract the pixel data (remaining bytes)
+            const pixelData = new Uint8Array(buffer.buffer, buffer.byteOffset + 20, chunkSize);
+            
+            const receiveTime = performance.now() - frameStart;
+            
+            worker.postMessage({ 
+              type: 'frame', 
+              data: pixelData,
+              width: width,
+              height: height,
+              receiveTime 
+            });
+          } else {
+            throw new Error("Expected binary data but received text");
+          }
         } catch (err) {
           console.error("Error processing WebSocket message:", err);
         }
@@ -69,23 +79,6 @@ async function startWebSocketServer(port: number) {
   } catch (err) {
     worker.postMessage({ type: 'error', error: (err as Error).message });
   }
-}
-
-// Helper function to convert base64 to Uint8Array
-function base64ToUint8Array(base64: string): Uint8Array {
-  // Remove data URL prefix if present
-  const base64Data = base64.includes(',') ? base64.split(',')[1] : base64;
-  
-  // Convert base64 to binary string
-  const binaryString = atob(base64Data);
-  
-  // Create Uint8Array from binary string
-  const bytes = new Uint8Array(binaryString.length);
-  for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-  
-  return bytes;
 }
 
 worker.onmessage = async (e: MessageEvent) => {

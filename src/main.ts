@@ -55,10 +55,6 @@ ws.onerror = (error) => {
   statusEl.style.color = 'white';
 };
 
-const canvas = document.createElement('canvas');
-canvas.width = width;
-canvas.height = height;
-const ctx = canvas.getContext('2d')!;
 const pixels = new Uint8Array(width * height * 4);
 
 let frame = 0;
@@ -72,20 +68,49 @@ function renderLoop() {
   renderer.setRenderTarget(null);
 
   if (ws.readyState === WebSocket.OPEN && frame++ % 5 === 0) {
+    // Read pixels directly from the render target
     renderer.readRenderTargetPixels(renderTarget, 0, 0, width, height, pixels);
-
+    
+    // Create a binary message with metadata + pixel data
+    const metadataBuffer = new ArrayBuffer(16); // 4 x 32-bit values
+    const metadataView = new DataView(metadataBuffer);
+    
+    // Write metadata: width, height, total size, and 1 chunk
+    metadataView.setUint32(0, width, true);
+    metadataView.setUint32(4, height, true);
+    metadataView.setUint32(8, pixels.byteLength, true);
+    metadataView.setUint32(12, 1, true); // 1 chunk
+    
+    // Create chunk size buffer (4 bytes)
+    const chunkSizeBuffer = new ArrayBuffer(4);
+    const chunkSizeView = new DataView(chunkSizeBuffer);
+    chunkSizeView.setUint32(0, pixels.byteLength, true);
+    
+    // Combine all buffers into one message
+    const message = new Uint8Array(
+      metadataBuffer.byteLength + 
+      chunkSizeBuffer.byteLength + 
+      pixels.byteLength
+    );
+    
+    // Copy metadata, chunk size, and pixel data into the message
+    message.set(new Uint8Array(metadataBuffer), 0);
+    message.set(new Uint8Array(chunkSizeBuffer), metadataBuffer.byteLength);
+    message.set(pixels, metadataBuffer.byteLength + chunkSizeBuffer.byteLength);
+    
+    // Send the binary message
+    ws.send(message);
+    
+    // Also display the image in the preview
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d')!;
     const imageData = ctx.createImageData(width, height);
     imageData.data.set(pixels);
     ctx.putImageData(imageData, 0, 0);
+    img.src = canvas.toDataURL();
 
-    canvas.toBlob((blob) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const base64 = reader.result!.toString().split(',')[1];
-        ws.send(base64);
-      };
-      reader.readAsDataURL(blob!);
-    }, 'image/jpeg', 0.6);
   }
 }
 
