@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebXR IWER Stereo Demo</title>
+    <script src="https://unpkg.com/iwer@latest/build/iwer.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { width: 100%; height: 100%; }
+        #xr-button {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 12px 24px;
+            z-index: 999;
+        }
+    </style>
+</head>
+<body>
+    <button id="xr-button">Enter XR</button>
+    <script>
+        // Initialize IWER
+        const xrDevice = new IWER.XRDevice(IWER.metaQuest3, {
+            referenceSpaceType: 'local-floor'
+        });
+        xrDevice.installRuntime();
+
+        // Configure stereo rendering
+        xrDevice.stereoEnabled = true;
+        xrDevice.ipd = 0.063;
+
+        // Three.js setup
+        const scene = new THREE.Scene();
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.xr.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        // Create proper camera configuration
+        const camera = new THREE.PerspectiveCamera(
+            10,
+            window.innerWidth / window.innerHeight,
+            0.1,
+            1000
+        );
+
+        // Add lighting
+        const light = new THREE.DirectionalLight(0xffffff, 1);
+        light.position.set(1, 1, 1);
+        scene.add(light);
+        scene.add(new THREE.AmbientLight(0x404040));
+
+        // Add a test object
+        const geometry = new THREE.BoxGeometry();
+        const material = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
+        const cube = new THREE.Mesh(geometry, material);
+        scene.add(cube);
+        //cube.scale.set(60, 60, 60);
+        cube.position.z = -8;
+
+        // WebSocket setup (port must match your Deno server, e.g. 8000)
+        const ws = new WebSocket('ws://localhost:8000');
+        const captureCanvas = document.createElement('canvas');
+        const ctx = captureCanvas.getContext('2d');
+
+        // XR Session handling
+        document.getElementById('xr-button').addEventListener('click', async () => {
+            try {
+                const session = await navigator.xr.requestSession('immersive-vr', {
+                    requiredFeatures: ['local-floor']
+                });
+                // Three.js WebXR setup
+                renderer.xr.setSession(session);
+
+                // Animation loop
+                let frameCounter = 0;
+                renderer.setAnimationLoop(() => {
+                    cube.rotation.y += 0.01;
+                    renderer.render(scene, camera);
+
+                    // Periodically capture the rendered frame as a compressed JPEG
+                    if (ws.readyState === WebSocket.OPEN && frameCounter % 7 === 0) {
+                        captureCanvas.width = renderer.domElement.width / 1;
+                        captureCanvas.height = renderer.domElement.height / 1;
+
+                        // Flip image vertically into captureCanvas
+                        ctx.save();
+                        ctx.scale(1, -1);
+                        ctx.drawImage(
+                            renderer.domElement,
+                            0, 0, renderer.domElement.width, renderer.domElement.height,
+                            0, -captureCanvas.height, captureCanvas.width, captureCanvas.height
+                        );
+                        ctx.restore();
+
+                        // Send as JPEG
+                        ws.send(captureCanvas.toDataURL('image/jpeg', 1));
+                    }
+                    frameCounter++;
+                });
+            } catch (err) {
+                console.error('XR session failed:', err);
+            }
+        });
+
+        // Handle position/orientation updates from Deno
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+
+            if (data.x !== undefined && data.qw !== undefined) {
+                //(console.log("HMD Position:", data.x, data.y, data.z);
+
+                const m = 10
+
+                xrDevice.position.set(data.x * m, data.y * m - 14, data.z * m); // Amplified scaling
+                xrDevice.quaternion.set(data.qx, data.qy, data.qz, data.qw);
+            } else {
+                console.log("Unknown WebSocket message:", data);
+            }
+        };
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Initial camera
+        camera.position.set(0, 1.6, 0);
+        renderer.render(scene, camera);
+    </script>
+</body>
+</html>
