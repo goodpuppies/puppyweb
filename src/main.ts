@@ -5,6 +5,7 @@ import { XRDevice, metaQuest3 } from 'iwer';
 const SEND_FRAME_INTERVAL = 5;
 const WS_URL = "ws://localhost:8000";
 const AUTO_START_XR = true;
+const XR_RENDER_SCALE = 1; // Use 1.0 for native device resolution recommendation
 
 // --- IWER Setup ---
 const xrDevice = new XRDevice(metaQuest3, {
@@ -136,6 +137,7 @@ async function startXrSession() {
 
     });
 
+    renderer.xr.setFramebufferScaleFactor(XR_RENDER_SCALE);
     await renderer.xr.setSession(session);
     renderer.setAnimationLoop(xrRenderLoop);
 
