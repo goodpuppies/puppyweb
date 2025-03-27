@@ -1,263 +1,282 @@
 import * as THREE from 'three';
 import { XRDevice, metaQuest3 } from 'iwer';
 
-const width = 256;
-const height = 256;
+// --- Configuration ---
+const SEND_FRAME_INTERVAL = 5;
+const WS_URL = "ws://localhost:8000";
+const AUTO_START_XR = true; 
 
-// Initialize IWER XR Device
-const xrDevice = new XRDevice(metaQuest3, {
-  referenceSpaceType: 'local-floor'
-});
+// --- IWER Setup ---
+const xrDevice = new XRDevice(metaQuest3, { stereoEnabled: true});
 xrDevice.installRuntime();
 
-// Configure stereo rendering
-xrDevice.stereoEnabled = true;
-xrDevice.ipd = 0.063; // Inter-pupillary distance in meters
+function createGradientTexture() {
+  const canvas = document.createElement('canvas');
+  const width = 2;
+  const height = 256;
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  if (!context) {
+    console.error("Failed to get 2D context for gradient");
+    return null;
+  }
+  const gradient = context.createLinearGradient(0, 0, 0, height);
+  gradient.addColorStop(0, '#1e4877');
+  gradient.addColorStop(1, '#76b6c4');
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, width, height);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+  return texture;
+}
 
-// Create renderer with WebXR support
+// --- Three.js Setup ---
+const scene = new THREE.Scene();
+const backgroundTexture = createGradientTexture();
+scene.background = backgroundTexture;
+
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.xr.enabled = true;
 document.body.appendChild(renderer.domElement);
 
-// Create render targets for left and right eyes
-const renderTargetLeft = new THREE.WebGLRenderTarget(width, height, {
-  format: THREE.RGBAFormat,
-  type: THREE.UnsignedByteType,
-});
+renderer.domElement.style.display = 'none'; 
 
-const renderTargetRight = new THREE.WebGLRenderTarget(width, height, {
-  format: THREE.RGBAFormat,
-  type: THREE.UnsignedByteType,
-});
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
 
-// Create scene and camera
-const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(70, width / height, 0.1, 1000);
-camera.position.z = 2;
-
-// Add a simple cube to the scene
+// --- Scene Content ---
 const cube = new THREE.Mesh(
-  new THREE.BoxGeometry(),
+  new THREE.BoxGeometry(0.5, 0.5, 0.5),
   new THREE.MeshBasicMaterial({ color: 0x00ff00 })
 );
+
+cube.position.z = -2;
 scene.add(cube);
+scene.add(new THREE.AmbientLight(0x404040));
 
-// Add a ground plane
-const ground = new THREE.Mesh(
-  new THREE.PlaneGeometry(10, 10),
-  new THREE.MeshBasicMaterial({ color: 0x999999, side: THREE.DoubleSide })
-);
-ground.rotation.x = Math.PI / 2;
-ground.position.y = -1;
-scene.add(ground);
 
-// Add a preview image to the page
-const leftEyeImg = document.createElement('img');
-leftEyeImg.width = width;
-leftEyeImg.height = height;
-leftEyeImg.style.border = '2px solid red';
-leftEyeImg.style.margin = '5px';
-document.body.appendChild(leftEyeImg);
-
-const rightEyeImg = document.createElement('img');
-rightEyeImg.width = width;
-rightEyeImg.height = height;
-rightEyeImg.style.border = '2px solid blue';
-rightEyeImg.style.margin = '5px';
-document.body.appendChild(rightEyeImg);
-
-// Add XR button
-const xrButton = document.createElement('button');
-xrButton.id = 'xr-button';
-xrButton.textContent = 'Enter XR';
-xrButton.style.position = 'absolute';
-xrButton.style.top = '20px';
-xrButton.style.left = '50%';
-xrButton.style.transform = 'translateX(-50%)';
-xrButton.style.padding = '12px 24px';
-xrButton.style.zIndex = '999';
-document.body.appendChild(xrButton);
-
-// Add connection status indicator
+// --- WebSocket Setup & Status ---
+const ws = new WebSocket(WS_URL);
 const statusEl = document.createElement('div');
+// Styles for status element (keep for initial feedback if needed)
 statusEl.style.padding = '10px';
 statusEl.style.fontFamily = 'monospace';
-statusEl.style.position = 'absolute';
-statusEl.style.top = '70px';
-statusEl.style.left = '50%';
-statusEl.style.transform = 'translateX(-50%)';
+statusEl.style.position = 'absolute'; // Allow easy hiding later if kept
+statusEl.style.top = '10px';
+statusEl.style.left = '10px';
+statusEl.style.zIndex = '10'; // Keep above hidden canvas
+statusEl.style.backgroundColor = '#607D8B'; // Initial grey color
+statusEl.style.color = 'white';
+statusEl.textContent = 'Connecting WebSocket...';
 document.body.appendChild(statusEl);
 
-// Connect to WebSocket
-const ws = new WebSocket("ws://localhost:8000");
-
-// Handle WebSocket events
 ws.onopen = () => {
   statusEl.textContent = 'WebSocket Connected';
   statusEl.style.backgroundColor = '#4CAF50';
-  statusEl.style.color = 'white';
+  if (AUTO_START_XR) {
+    console.log("WebSocket connected, attempting to auto-start XR...");
+    startXrSession(); // Try starting XR automatically
+  }
 };
-
 ws.onclose = () => {
   statusEl.textContent = 'WebSocket Disconnected';
   statusEl.style.backgroundColor = '#F44336';
-  statusEl.style.color = 'white';
+  if (renderer.xr.getSession()) {
+    renderer.setAnimationLoop(null);
+  }
+  // Show UI elements again if session ends and they were hidden
+  xrButton.style.display = 'block';
+  statusEl.style.display = 'block';
 };
-
 ws.onerror = (error) => {
   console.error('WebSocket Error:', error);
   statusEl.textContent = 'WebSocket Error';
   statusEl.style.backgroundColor = '#FF9800';
-  statusEl.style.color = 'white';
 };
 
-// Pixel buffers for left and right eyes
-const pixelsLeft = new Uint8Array(width * height * 4);
-const pixelsRight = new Uint8Array(width * height * 4);
-
+// --- Pixel Buffer & Dimensions ---
+let pixels = new Uint8Array(0);
+let currentWidth = 0;
+let currentHeight = 0;
 let frame = 0;
-let xrSession: XRSession | null = null;
 
-// Handle XR button click
-xrButton.addEventListener('click', async () => {
-  if (!xrSession) {
-    try {
-      xrSession = await navigator.xr!.requestSession('immersive-vr', {
-        requiredFeatures: ['local-floor']
-      });
-      
-      renderer.xr.setSession(xrSession);
-      xrButton.textContent = 'Exit XR';
-      
-      xrSession.addEventListener('end', () => {
-        xrSession = null;
-        xrButton.textContent = 'Enter XR';
-      });
-    } catch (error) {
-      console.error('Error entering XR:', error);
-    }
-  } else {
-    xrSession.end();
-  }
+// --- Offscreen Render Target & Copy Scene (Same as before) ---
+const copyRenderTarget = new THREE.WebGLRenderTarget(1, 1, {
+  format: THREE.RGBAFormat,
+  type: THREE.UnsignedByteType,
 });
 
-// Function to send eye frame data to WebSocket
-function sendEyeFrames() {
-  if (ws.readyState !== WebSocket.OPEN) return;
-  
-  // Read pixels from left eye render target
-  renderer.readRenderTargetPixels(renderTargetLeft, 0, 0, width, height, pixelsLeft);
-  
-  // Read pixels from right eye render target
-  renderer.readRenderTargetPixels(renderTargetRight, 0, 0, width, height, pixelsRight);
-  
-  // Create metadata for left eye
-  const metadataLeftBuffer = new ArrayBuffer(16);
-  const metadataLeftView = new DataView(metadataLeftBuffer);
-  metadataLeftView.setUint32(0, width, true);
-  metadataLeftView.setUint32(4, height, true);
-  metadataLeftView.setUint32(8, pixelsLeft.byteLength, true);
-  metadataLeftView.setUint32(12, 1, true); // 1 chunk
-  
-  // Create chunk size buffer for left eye
-  const chunkSizeLeftBuffer = new ArrayBuffer(4);
-  const chunkSizeLeftView = new DataView(chunkSizeLeftBuffer);
-  chunkSizeLeftView.setUint32(0, pixelsLeft.byteLength, true);
-  
-  // Combine left eye buffers
-  const messageLeft = new Uint8Array(
-    metadataLeftBuffer.byteLength + 
-    chunkSizeLeftBuffer.byteLength + 
-    pixelsLeft.byteLength
-  );
-  messageLeft.set(new Uint8Array(metadataLeftBuffer), 0);
-  messageLeft.set(new Uint8Array(chunkSizeLeftBuffer), metadataLeftBuffer.byteLength);
-  messageLeft.set(pixelsLeft, metadataLeftBuffer.byteLength + chunkSizeLeftBuffer.byteLength);
-  
-  // Send left eye data
-  ws.send(messageLeft);
-  
-  // Create metadata for right eye
-  const metadataRightBuffer = new ArrayBuffer(16);
-  const metadataRightView = new DataView(metadataRightBuffer);
-  metadataRightView.setUint32(0, width, true);
-  metadataRightView.setUint32(4, height, true);
-  metadataRightView.setUint32(8, pixelsRight.byteLength, true);
-  metadataRightView.setUint32(12, 1, true); // 1 chunk
-  
-  // Create chunk size buffer for right eye
-  const chunkSizeRightBuffer = new ArrayBuffer(4);
-  const chunkSizeRightView = new DataView(chunkSizeRightBuffer);
-  chunkSizeRightView.setUint32(0, pixelsRight.byteLength, true);
-  
-  // Combine right eye buffers
-  const messageRight = new Uint8Array(
-    metadataRightBuffer.byteLength + 
-    chunkSizeRightBuffer.byteLength + 
-    pixelsRight.byteLength
-  );
-  messageRight.set(new Uint8Array(metadataRightBuffer), 0);
-  messageRight.set(new Uint8Array(chunkSizeRightBuffer), metadataRightBuffer.byteLength);
-  messageRight.set(pixelsRight, metadataRightBuffer.byteLength + chunkSizeRightBuffer.byteLength);
-  
-  // Send right eye data
-  ws.send(messageRight);
-  
-  // Update preview images
-  updatePreviewImages(pixelsLeft, pixelsRight);
+
+// --- WebXR Button ---
+const xrButton = document.createElement('button');
+xrButton.id = 'xr-button';
+xrButton.textContent = 'Enter XR';
+xrButton.style.padding = '12px 24px';
+xrButton.style.margin = '10px';
+xrButton.style.position = 'absolute';
+xrButton.style.top = '50px'; // Position below status
+xrButton.style.left = '10px';
+xrButton.style.zIndex = '10';
+if (!AUTO_START_XR) { // Only add button if not auto-starting
+  document.body.appendChild(xrButton);
 }
 
-// Function to update preview images
-function updatePreviewImages(leftData: Uint8Array, rightData: Uint8Array) {
-  const canvasLeft = document.createElement('canvas');
-  canvasLeft.width = width;
-  canvasLeft.height = height;
-  const ctxLeft = canvasLeft.getContext('2d')!;
-  const imageDataLeft = ctxLeft.createImageData(width, height);
-  imageDataLeft.data.set(leftData);
-  ctxLeft.putImageData(imageDataLeft, 0, 0);
-  leftEyeImg.src = canvasLeft.toDataURL();
-  
-  const canvasRight = document.createElement('canvas');
-  canvasRight.width = width;
-  canvasRight.height = height;
-  const ctxRight = canvasRight.getContext('2d')!;
-  const imageDataRight = ctxRight.createImageData(width, height);
-  imageDataRight.data.set(rightData);
-  ctxRight.putImageData(imageDataRight, 0, 0);
-  rightEyeImg.src = canvasRight.toDataURL();
+// --- Function to Start XR Session ---
+async function startXrSession() {
+  // Ensure navigator.xr and requestSession exist
+  if (!navigator.xr) {
+    statusEl.textContent = "WebXR not supported by browser.";
+    statusEl.style.backgroundColor = '#F44336';
+    console.error("WebXR not supported");
+    return;
+  }
+  if (!await navigator.xr.isSessionSupported('immersive-vr')) {
+    statusEl.textContent = "'immersive-vr' mode not supported.";
+    statusEl.style.backgroundColor = '#F44336';
+    console.error("'immersive-vr' mode not supported.");
+    return;
+  }
+
+  try {
+    const session = await navigator.xr.requestSession('immersive-vr', {
+      requiredFeatures: ['local-floor']
+    });
+    statusEl.textContent = 'XR Session Active';
+    statusEl.style.backgroundColor = '#2196F3'; // Blue for active
+
+    // --- HIDE UI ELEMENTS NOW ---
+    if (!AUTO_START_XR) { // Keep button if auto-start fails? Or always hide? Let's hide.
+      xrButton.style.display = 'none';
+    }
+    // Optionally hide status too, or keep it for feedback
+    // statusEl.style.display = 'none';
+
+
+    session.addEventListener('end', () => {
+      statusEl.textContent = 'XR Session Ended';
+      statusEl.style.backgroundColor = '#607D8B';
+      renderer.setAnimationLoop(null);
+      // img.src = ''; // No img element anymore
+
+      // Show UI elements again
+      if (!AUTO_START_XR) {
+        xrButton.style.display = 'block';
+        xrButton.textContent = 'Enter XR'; // Reset button text
+      }
+      // statusEl.style.display = 'block'; // Keep status visible?
+
+    });
+
+    await renderer.xr.setSession(session);
+    renderer.setAnimationLoop(xrRenderLoop);
+
+  } catch (err) {
+    console.error('XR session failed:', err);
+    statusEl.textContent = `XR Error: ${err.message}`;
+    statusEl.style.backgroundColor = '#F44336';
+    // Ensure button is visible if auto-start failed
+    if (AUTO_START_XR && !document.body.contains(xrButton)) {
+      document.body.appendChild(xrButton); // Add button if it wasn't there
+    }
+    xrButton.style.display = 'block';
+  }
 }
 
-// Main render loop
-function renderLoop() {
-  requestAnimationFrame(renderLoop);
-  
-  // Animate the cube
+// Keep track of XR layer dimensions
+let xrLayerWidth = 0;
+let xrLayerHeight = 0;
+
+// --- MODIFIED: XR Render Loop ---
+function xrRenderLoop(timestamp, xrFrame) {
+  const session = renderer.xr.getSession();
+  if (!session) return;
+
+  const layer = session.renderState.baseLayer;
+  if (!layer) {
+    // console.warn("No baseLayer found..."); // Reduce console spam
+    return;
+  }
+
+  const currentLayerWidth = layer.framebufferWidth  || 512;
+  const currentLayerHeight = layer.framebufferHeight || 512;
+
+  if (currentLayerWidth !== xrLayerWidth || currentLayerHeight !== xrLayerHeight) {
+    xrLayerWidth = currentLayerWidth;
+    xrLayerHeight = currentLayerHeight;
+
+
+    const eyeWidth = Math.floor(xrLayerWidth / 2);
+    const eyeHeight = xrLayerHeight;
+
+    if (eyeWidth > 0 && eyeHeight > 0) {
+      if (copyRenderTarget.width !== eyeWidth || copyRenderTarget.height !== eyeHeight) {
+
+        copyRenderTarget.setSize(eyeWidth, eyeHeight);
+      }
+      currentWidth = eyeWidth;
+      currentHeight = eyeHeight;
+      const requiredSize = currentWidth * currentHeight * 4;
+      if (pixels.byteLength !== requiredSize) {
+
+        pixels = new Uint8Array(requiredSize);
+      }
+    }
+  }
+
   cube.rotation.y += 0.01;
   cube.rotation.x += 0.005;
-  
-  // Render to both eye targets
-  renderer.setRenderTarget(renderTargetLeft);
-  renderer.render(scene, camera);
-  
-  // Slightly offset camera for right eye
-  camera.position.x += 0.063; // IPD offset
-  renderer.setRenderTarget(renderTargetRight);
-  renderer.render(scene, camera);
-  camera.position.x -= 0.063; // Reset position
-  
-  // Reset render target
-  renderer.setRenderTarget(null);
-  
-  // Send frames every few frames to limit bandwidth
-  if (frame++ % 5 === 0) {
-    sendEyeFrames();
-  }
-  
-  // Render to the screen as well
-  renderer.render(scene, camera);
-}
 
-// Start the render loop
-renderLoop();
+  const currentRenderTarget = renderer.getRenderTarget();
+  const currentXrEnabled = renderer.xr.enabled;
+  renderer.render(scene, camera); // Render to XR display
+
+  if (ws.readyState === WebSocket.OPEN && frame++ % SEND_FRAME_INTERVAL === 0 && xrLayerWidth > 0 && xrLayerHeight > 0 && copyRenderTarget.width > 0) {
+    try {
+      const xrCameras = renderer.xr.getCamera(camera);
+      const leftEyeCamera = xrCameras.cameras[0];
+
+      if (!leftEyeCamera) {
+        renderer.setRenderTarget(currentRenderTarget);
+        renderer.xr.enabled = currentXrEnabled;
+        return;
+      }
+
+      renderer.setRenderTarget(copyRenderTarget);
+      renderer.xr.enabled = false; // Disable XR for copy render
+      renderer.render(scene, leftEyeCamera); // Render left eye to our target
+
+      renderer.readRenderTargetPixels( // Read from our target
+        copyRenderTarget, 0, 0, currentWidth, currentHeight, pixels
+      );
+
+      renderer.setRenderTarget(currentRenderTarget); // Restore state
+      renderer.xr.enabled = currentXrEnabled;       // Restore state
+
+      // --- Send Binary Message (Same as before) ---
+      const metadataBuffer = new ArrayBuffer(16);
+      const metadataView = new DataView(metadataBuffer);
+      metadataView.setUint32(0, currentWidth, true);
+      metadataView.setUint32(4, currentHeight, true);
+      metadataView.setUint32(8, pixels.byteLength, true);
+      metadataView.setUint32(12, 1, true);
+      const chunkSizeBuffer = new ArrayBuffer(4);
+      const chunkSizeView = new DataView(chunkSizeBuffer);
+      chunkSizeView.setUint32(0, pixels.byteLength, true);
+      const message = new Uint8Array(metadataBuffer.byteLength + chunkSizeBuffer.byteLength + pixels.byteLength);
+      message.set(new Uint8Array(metadataBuffer), 0);
+      message.set(new Uint8Array(chunkSizeBuffer), metadataBuffer.byteLength);
+      message.set(pixels, metadataBuffer.byteLength + chunkSizeBuffer.byteLength);
+      ws.send(message);
+
+
+    } catch (e) {
+      console.error("Error during double render capture or sending:", e);
+      renderer.setRenderTarget(currentRenderTarget); // Restore state on error
+      renderer.xr.enabled = currentXrEnabled;       // Restore state on error
+    }
+  } else {
+    // Ensure state is correct if not capturing (likely redundant)
+    renderer.setRenderTarget(currentRenderTarget);
+    renderer.xr.enabled = currentXrEnabled;
+  }
+}
