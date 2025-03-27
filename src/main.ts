@@ -8,21 +8,12 @@ const AUTO_START_XR = true;
 
 // --- IWER Setup ---
 const xrDevice = new XRDevice(metaQuest3, {
-  // referenceSpaceType: 'local-floor' // Good to keep this explicit
-  stereoEnabled: true // You had this, keep if needed for IWER behavior
+  stereoEnabled: true,
+  //ipd: 0.90,
+  //fovy?
 });
 xrDevice.installRuntime();
 
-// --- Helper Canvas for Pixel Capture ---
-// We need this again for drawImage/getImageData
-const captureCanvas = document.createElement('canvas');
-const ctx = captureCanvas.getContext('2d', {
-  // Optional: May improve readback performance, but test compatibility
-  // willReadFrequently: true
-});
-if (!ctx) {
-  throw new Error("Could not create 2D context for capture");
-}
 
 function createGradientTexture() {
   const canvas = document.createElement('canvas');
@@ -48,27 +39,21 @@ function createGradientTexture() {
 // --- Three.js Setup ---
 const scene = new THREE.Scene();
 const backgroundTexture = createGradientTexture();
-if (backgroundTexture) { // Check if texture creation succeeded
+if (backgroundTexture) {
   scene.background = backgroundTexture;
 } else {
-  scene.background = new THREE.Color(0x333333); // Fallback
+  scene.background = new THREE.Color(0x333333);
 }
 
-
 const renderer = new THREE.WebGLRenderer({
-  antialias: true,
-  // If this method fails, we might need preserveDrawingBuffer: true
-  // to read from renderer.domElement as a fallback test.
-  // But for reading from IWER's canvas, it shouldn't be needed.
+  antialias: true
 });
 renderer.xr.enabled = true;
 document.body.appendChild(renderer.domElement);
-renderer.domElement.style.display = 'none'; // Keep hidden
-// Set initial size based on window, XR might override
+renderer.domElement.style.display = 'none';
 renderer.setSize(window.innerWidth, window.innerHeight);
 
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
-// Initial pose, XR controller will update this
 camera.position.set(0, 1.6, 0);
 
 // --- Scene Content ---
@@ -81,7 +66,7 @@ scene.add(cube);
 scene.add(new THREE.AmbientLight(0x404040));
 
 
-// --- WebSocket Setup & Status (Mostly unchanged) ---
+// --- WebSocket Setup & Status (Unchanged) ---
 const ws = new WebSocket(WS_URL);
 const statusEl = document.createElement('div');
 statusEl.style.padding = '10px';
@@ -95,7 +80,7 @@ statusEl.style.color = 'white';
 statusEl.textContent = 'Connecting WebSocket...';
 document.body.appendChild(statusEl);
 
-ws.onopen = () => {
+ws.onopen = () => { 
   statusEl.textContent = 'WebSocket Connected';
   statusEl.style.backgroundColor = '#4CAF50';
   if (AUTO_START_XR) {
@@ -103,18 +88,15 @@ ws.onopen = () => {
     startXrSession();
   }
 };
-ws.onclose = () => {
+ws.onclose = () => { 
   statusEl.textContent = 'WebSocket Disconnected';
   statusEl.style.backgroundColor = '#F44336';
   if (renderer.xr.getSession()) {
     renderer.setAnimationLoop(null);
   }
-  if (!AUTO_START_XR) { // Only show button if it was manually hidden
-    xrButton.style.display = 'block';
-  }
-  statusEl.style.display = 'block'; // Always show status on close?
+  statusEl.style.display = 'block';
 };
-ws.onerror = (error) => {
+ws.onerror = (error) => { 
   console.error('WebSocket Error:', error);
   statusEl.textContent = 'WebSocket Error';
   statusEl.style.backgroundColor = '#FF9800';
@@ -126,29 +108,18 @@ let currentWidth = 0;
 let currentHeight = 0;
 let frame = 0;
 
-// --- REMOVED Offscreen Render Target & Copy Scene ---
-// const copyRenderTarget = ...
-// const copyCamera = ...
-// const copyScene = ...
-
-// --- WebXR Button (Mostly unchanged) ---
-const xrButton = document.createElement('button');
-xrButton.id = 'xr-button';
-xrButton.textContent = 'Enter XR';
-xrButton.style.padding = '12px 24px';
-xrButton.style.margin = '10px';
-xrButton.style.position = 'absolute';
-xrButton.style.top = '50px';
-xrButton.style.left = '10px';
-xrButton.style.zIndex = '10';
-if (!AUTO_START_XR) {
-  document.body.appendChild(xrButton);
-}
-
 // --- Function to Start XR Session (Unchanged) ---
 async function startXrSession() {
-  if (!navigator.xr) { /* ... error handling ... */ return; }
-  if (!await navigator.xr.isSessionSupported('immersive-vr')) { /* ... error handling ... */ return; }
+  if (!navigator.xr) {
+    statusEl.textContent = 'WebXR not supported!';
+    statusEl.style.backgroundColor = '#F44336';
+    return;
+  }
+  if (!await navigator.xr.isSessionSupported('immersive-vr')) {
+    statusEl.textContent = 'Immersive VR not supported!';
+    statusEl.style.backgroundColor = '#F44336';
+    return;
+  }
 
   try {
     const session = await navigator.xr.requestSession('immersive-vr', {
@@ -156,151 +127,158 @@ async function startXrSession() {
     });
     statusEl.textContent = 'XR Session Active';
     statusEl.style.backgroundColor = '#2196F3';
-    if (!AUTO_START_XR) {
-      xrButton.style.display = 'none';
-    }
-    // statusEl.style.display = 'none'; // Optionally hide
+
 
     session.addEventListener('end', () => {
       statusEl.textContent = 'XR Session Ended';
       statusEl.style.backgroundColor = '#607D8B';
       renderer.setAnimationLoop(null);
-      if (!AUTO_START_XR) {
-        xrButton.style.display = 'block';
-        xrButton.textContent = 'Enter XR';
-      }
-      // statusEl.style.display = 'block'; // Optionally show
+
     });
 
     await renderer.xr.setSession(session);
-    // **CRITICAL**: Set size *after* session start often needed for XR layer init
-    // Let's rely on the layer size detection within the loop for capture size.
-    // renderer.setSize(window.innerWidth, window.innerHeight); // Re-evaluate if needed
-
     renderer.setAnimationLoop(xrRenderLoop);
 
   } catch (err) {
     console.error('XR session failed:', err);
-    statusEl.textContent = `XR Error: ${err.message}`;
+    statusEl.textContent = `XR Error: ${(err as Error).message}`;
     statusEl.style.backgroundColor = '#F44336';
-    if (AUTO_START_XR && !document.body.contains(xrButton)) {
-      document.body.appendChild(xrButton);
-    }
-    if (!AUTO_START_XR || !document.body.contains(xrButton)) { // Ensure button exists if needed
-      if (!document.body.contains(xrButton)) document.body.appendChild(xrButton);
-      xrButton.style.display = 'block';
-    } else if (document.body.contains(xrButton)) {
-      xrButton.style.display = 'block';
-    }
-
+   
+    
   }
 }
-// Add listener only if button is added
-if (!AUTO_START_XR) {
-  xrButton.addEventListener('click', startXrSession);
-}
 
 
-// --- EXPERIMENTAL: XR Render Loop using IWER Canvas ---
+// --- XR Render Loop ---
 function xrRenderLoop(timestamp, xrFrame) {
   const session = renderer.xr.getSession();
-  if (!session) return;
+  if (!session || !xrFrame) return; // Ensure xrFrame exists
 
   // --- Update Scene ---
   cube.rotation.y += 0.01;
   cube.rotation.x += 0.005;
 
-  // --- 1. Render Application Scene to XR Layer (for display in headset) ---
-  // This is still necessary for the XR device to see anything.
+  // --- 1. Render Application Scene to XR Layer ---
+  // This remains necessary for the headset display.
   renderer.render(scene, camera);
   // --- XR display render done ---
 
 
-  // --- 2. Capture Frame from IWER's Canvas (if interval met) ---
+  // --- 2. Capture Frame (if interval met) ---
   if (ws.readyState === WebSocket.OPEN && frame++ % SEND_FRAME_INTERVAL === 0) {
 
-    const iwerContainer = xrDevice.canvasContainer;
-    if (!iwerContainer) {
-      // console.warn("IWER canvasContainer not found yet. Skipping capture.");
-      return;
+    let captureSuccess = false;
+    let errorMsg = "";
+
+    // --- Attempt using readPixels ---
+    const gl = renderer.getContext();
+    const layer = session.renderState.baseLayer;
+
+    if (!gl || !layer) {
+      errorMsg = "WebGL context or XRWebGLLayer not available.";
+    } else {
+      const W = layer.framebufferWidth;
+      const H = layer.framebufferHeight;
+
+      if (W <= 0 || H <= 0) {
+        errorMsg = `Invalid framebuffer dimensions: ${W}x${H}`;
+      } else {
+        // Resize pixel buffer if needed
+        const requiredSize = W * H * 4;
+        if (pixels.byteLength !== requiredSize || currentWidth !== W || currentHeight !== H) {
+          console.log(`Resizing pixel buffer for readPixels: ${W}x${H} (${requiredSize} bytes)`);
+          try {
+            pixels = new Uint8Array(requiredSize);
+            currentWidth = W;
+            currentHeight = H;
+          } catch (allocError) {
+            console.error("Failed to allocate pixel buffer:", allocError);
+            errorMsg = "Pixel buffer allocation failed.";
+            // Reset dimensions to prevent repeated allocation attempts for this size
+            currentWidth = 0;
+            currentHeight = 0;
+            pixels = new Uint8Array(0);
+            // Skip capture this frame
+            W = 0; H = 0; // Prevent readPixels call
+          }
+        }
+
+        if (W > 0 && H > 0) { // Check again in case allocation failed
+          try {
+            // **CRITICAL**: Ensure correct framebuffer is bound.
+            // This is the biggest uncertainty. Three.js might leave the
+            // XR layer FB bound, or it might switch back to the default (null).
+            // Let's *assume* it's readable without explicit binding first.
+            // If this doesn't work, you might need:
+            // gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer); // Requires knowing the exact FB, layer.framebuffer might not be correct/accessible
+            // or maybe reading from the default buffer works if preserveDrawingBuffer=true?
+            // gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+            // Perform the readPixels operation
+            gl.readPixels(
+              0,          // x
+              0,          // y
+              currentWidth, // width
+              currentHeight,// height
+              gl.RGBA,      // format
+              gl.UNSIGNED_BYTE, // type
+              pixels        // target buffer
+            );
+
+            // Check for GL errors (optional but good practice)
+            const glError = gl.getError();
+            if (glError !== gl.NO_ERROR) {
+              errorMsg = `gl.readPixels error: ${glError}`;
+              console.error(errorMsg);
+            } else {
+              captureSuccess = true;
+              // Pixels are now in the 'pixels' Uint8Array
+            }
+
+          } catch (e) {
+            errorMsg = `Error during gl.readPixels: ${e}`;
+            console.error(errorMsg, e);
+          }
+        }
+      }
     }
 
-    // Find the canvas *inside* the container
-    const iwerCanvas = iwerContainer.querySelector('canvas');
-    if (!iwerCanvas) {
-      // console.warn("Canvas element not found inside IWER container. Skipping capture.");
-      return;
-    }
+    
 
-    // Get dimensions from IWER's canvas
-    const iwerWidth = iwerCanvas.width;
-    const iwerHeight = iwerCanvas.height;
+    // --- 3. Send Binary Message (if capture was successful) ---
+    if (captureSuccess && currentWidth > 0 && currentHeight > 0) {
+      try {
+        const metadataBuffer = new ArrayBuffer(16); // w, h, len, chunks=1
+        const metadataView = new DataView(metadataBuffer);
+        metadataView.setUint32(0, currentWidth, true);       // width
+        metadataView.setUint32(4, currentHeight, true);      // height
+        metadataView.setUint32(8, pixels.byteLength, true); // data length
+        metadataView.setUint32(12, 1, true);                  // number of chunks
 
-    if (iwerWidth <= 0 || iwerHeight <= 0) {
-      console.warn("IWER canvas has invalid dimensions (<=0). Skipping capture.");
-      return;
-    }
+        const chunkSizeBuffer = new ArrayBuffer(4);
+        const chunkSizeView = new DataView(chunkSizeBuffer);
+        chunkSizeView.setUint32(0, pixels.byteLength, true); // Size of this chunk
 
-    // Resize our capture canvas and pixel buffer if needed
-    if (captureCanvas.width !== iwerWidth || captureCanvas.height !== iwerHeight) {
-      console.log(`Resizing capture canvas to match IWER canvas: ${iwerWidth}x${iwerHeight}`);
-      captureCanvas.width = iwerWidth;
-      captureCanvas.height = iwerHeight;
-    }
-    // Ensure pixel buffer matches
-    const requiredSize = iwerWidth * iwerHeight * 4;
-    if (pixels.byteLength !== requiredSize || currentWidth !== iwerWidth || currentHeight !== iwerHeight) {
-      console.log(`Resizing pixel buffer for IWER capture: ${requiredSize} bytes`);
-      pixels = new Uint8Array(requiredSize);
-      currentWidth = iwerWidth;
-      currentHeight = iwerHeight;
-    }
+        // Create the final message ArrayBuffer
+        const message = new Uint8Array(metadataBuffer.byteLength + chunkSizeBuffer.byteLength + pixels.byteLength);
 
-    try {
-      // --- Capture from IWER Canvas using 2D Context ---
-      // 1. Draw the IWER canvas onto our helper 2D canvas
-      ctx.drawImage(iwerCanvas, 0, 0, currentWidth, currentHeight);
+        // Copy data into the final buffer
+        message.set(new Uint8Array(metadataBuffer), 0);
+        message.set(new Uint8Array(chunkSizeBuffer), metadataBuffer.byteLength);
+        message.set(pixels, metadataBuffer.byteLength + chunkSizeBuffer.byteLength);
 
-      // 2. Read the pixels from the helper 2D canvas
-      const imageData = ctx.getImageData(0, 0, currentWidth, currentHeight);
+        // Send the combined message
+        ws.send(message);
 
-      // 3. Copy pixel data
-      pixels.set(imageData.data);
-      // --- Pixels read from IWER canvas ---
-
-      // --- 4. Send Binary Message ---
-      // (This part is identical to before, uses currentWidth, currentHeight, pixels)
-      const metadataBuffer = new ArrayBuffer(16);
-      const metadataView = new DataView(metadataBuffer);
-      metadataView.setUint32(0, currentWidth, true);
-      metadataView.setUint32(4, currentHeight, true);
-      metadataView.setUint32(8, pixels.byteLength, true);
-      metadataView.setUint32(12, 1, true);
-      const chunkSizeBuffer = new ArrayBuffer(4);
-      const chunkSizeView = new DataView(chunkSizeBuffer);
-      chunkSizeView.setUint32(0, pixels.byteLength, true);
-      const message = new Uint8Array(metadataBuffer.byteLength + chunkSizeBuffer.byteLength + pixels.byteLength);
-      message.set(new Uint8Array(metadataBuffer), 0);
-      message.set(new Uint8Array(chunkSizeBuffer), metadataBuffer.byteLength);
-      message.set(pixels, metadataBuffer.byteLength + chunkSizeBuffer.byteLength);
-      ws.send(message);
-
-    } catch (e) {
-      console.error("Error capturing from IWER canvas or sending:", e);
-      // Log the canvas state if possible
-      console.error("IWER canvas:", iwerCanvas);
+      } catch (e) {
+        console.error("Error constructing or sending WebSocket message:", e);
+        // Don't necessarily stop the loop, maybe it's a temporary WS issue
+      }
+    } else if (errorMsg) {
+      // Only log errors periodically to avoid flooding console
+      if (frame % 60 === 1) { // Log roughly once per second if errors persist
+        console.warn(`Frame capture failed ${errorMsg}`);
+      }
     }
   }
 }
-
-// --- Window Resize Handler (Mostly unchanged, less critical if main canvas hidden) ---
-window.addEventListener('resize', () => {
-  if (!renderer.xr.getSession()) {
-    // Update camera aspect ratio for potential non-XR view
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    // Update renderer size if it were visible
-    renderer.setSize(window.innerWidth, window.innerHeight);
-  }
-  // IWER canvas size is likely managed internally by IWER
-});
