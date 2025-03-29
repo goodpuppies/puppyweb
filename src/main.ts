@@ -55,14 +55,19 @@ renderer.domElement.style.display = 'none';
 renderer.setSize(window.innerWidth, window.innerHeight);
 
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
-camera.position.set(0, 1.6, 0);
 
 // --- Scene Content ---
+// Add a grid helper - 10x10 grid with 1-meter squares
+const gridSize = 10; // 10 meters in each direction
+const gridDivisions = 10; // 10 divisions = 1-meter squares
+const gridHelper = new THREE.GridHelper(gridSize, gridDivisions);
+scene.add(gridHelper);
+
 const cube = new THREE.Mesh(
   new THREE.BoxGeometry(0.5, 0.5, 0.5),
   new THREE.MeshBasicMaterial({ color: 0x00ff00 })
 );
-cube.position.z = -2;
+cube.position.z = -3;
 scene.add(cube);
 scene.add(new THREE.AmbientLight(0x404040));
 
@@ -101,6 +106,55 @@ ws.onerror = (error) => {
   console.error('WebSocket Error:', error);
   statusEl.textContent = 'WebSocket Error';
   statusEl.style.backgroundColor = '#FF9800';
+};
+
+ws.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+
+  if (data.mDeviceToAbsoluteTracking) {
+    // Extract position and rotation from the transformation matrix
+    const matrix = data.mDeviceToAbsoluteTracking.m;
+
+    // Extract position from the 4th column of the matrix
+    const position = {
+      x: matrix[0][3],
+      y: matrix[1][3],
+      z: matrix[2][3]
+    };
+
+    // Convert the 3x3 rotation part of the matrix to a quaternion
+    const m = new THREE.Matrix4();
+    m.set(
+      matrix[0][0], matrix[0][1], matrix[0][2], 0,
+      matrix[1][0], matrix[1][1], matrix[1][2], 0,
+      matrix[2][0], matrix[2][1], matrix[2][2], 0,
+      0, 0, 0, 1
+    );
+
+    const quaternion = new THREE.Quaternion();
+    quaternion.setFromRotationMatrix(m);
+
+    // Update XR device position and orientation
+    xrDevice.position.set(position.x, position.y, position.z);
+    xrDevice.quaternion.copy(quaternion);
+
+    // Optional: use velocity and angular velocity data if needed
+    if (data.vVelocity) {
+      // Process linear velocity if needed
+      // const velocity = data.vVelocity.v;
+    }
+
+    if (data.vAngularVelocity) {
+      // Process angular velocity if needed
+      // const angularVelocity = data.vAngularVelocity.v;
+    }
+  } else if (data.x !== undefined && data.qw !== undefined) {
+    // Keep backward compatibility with the old format
+    xrDevice.position.set(data.x, data.y, data.z);
+    xrDevice.quaternion.set(data.qx, data.qy, data.qz, data.qw);
+  } else {
+    console.log("Unknown WebSocket message:", data);
+  }
 };
 
 // --- Pixel Buffer & Dimensions ---
@@ -152,7 +206,7 @@ async function startXrSession() {
 
 
 // --- XR Render Loop ---
-function xrRenderLoop(timestamp, xrFrame) {
+function xrRenderLoop(_timestamp: unknown, xrFrame: unknown) {
   const session = renderer.xr.getSession();
   if (!session || !xrFrame) return; // Ensure xrFrame exists
 
@@ -179,8 +233,8 @@ function xrRenderLoop(timestamp, xrFrame) {
     if (!gl || !layer) {
       errorMsg = "WebGL context or XRWebGLLayer not available.";
     } else {
-      const W = layer.framebufferWidth;
-      const H = layer.framebufferHeight;
+      let W = layer.framebufferWidth;
+      let H = layer.framebufferHeight;
 
       if (W <= 0 || H <= 0) {
         errorMsg = `Invalid framebuffer dimensions: ${W}x${H}`;

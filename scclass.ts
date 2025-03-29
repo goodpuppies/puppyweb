@@ -107,11 +107,6 @@ export class ScreenCapturer {
     this.log("Starting WebSocket frame receiver worker...");
     this.worker = new Worker(new URL("./frame_receiver_worker.ts", import.meta.url).href, {
       type: "module",
-      deno: {
-        permissions: {
-          net: true,
-        },
-      },
     });
 
     // Wait for worker to be ready
