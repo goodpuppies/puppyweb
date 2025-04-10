@@ -39,12 +39,13 @@ function createGradientTexture() {
 
 // --- Three.js Setup ---
 const scene = new THREE.Scene();
-const backgroundTexture = createGradientTexture();
+/* const backgroundTexture = createGradientTexture();
 if (backgroundTexture) {
   scene.background = backgroundTexture;
 } else {
   scene.background = new THREE.Color(0x333333);
-}
+} */
+//background for vr
 
 const renderer = new THREE.WebGLRenderer({
   antialias: true
@@ -177,7 +178,7 @@ async function startXrSession() {
   }
 
   try {
-    const session = await navigator.xr.requestSession('immersive-vr', {
+    const session = await navigator.xr.requestSession('immersive-ar', {
       requiredFeatures: ['local-floor']
     });
     statusEl.textContent = 'XR Session Active';

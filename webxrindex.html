@@ -106,6 +106,8 @@
 
         // Handle position/orientation updates from Deno
         ws.onmessage = (event) => {
+
+
             const data = JSON.parse(event.data);
 
             if (data.x !== undefined && data.qw !== undefined) {
