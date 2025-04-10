@@ -185,7 +185,7 @@ async function frame() {
 
   if (frameData) {
     currentTexture = createTextureFromScreenshot(frameData.data, frameData.width, frameData.height);
-
+    
     // Update viewport to match frame dimensions
     gl.Viewport(0, 0, frameData.width, frameData.height);
 
@@ -220,6 +220,7 @@ async function frame() {
     framesThisSecond++;
     const now = performance.now();
     if (now - lastFpsUpdate >= 1000) {
+      console.log(frameData.width, frameData.height)
       currentFps = framesThisSecond;
       framesThisSecond = 0;
       lastFpsUpdate = now;
