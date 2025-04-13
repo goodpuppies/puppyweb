@@ -3,6 +3,7 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { XR, createXRStore, useXR } from '@react-three/xr';
 import { XRDevice, metaQuest3 } from 'iwer';
 import * as THREE from 'three';
+import { Scene } from './Scene.tsx'
 
 // --- Configuration ---
 const SEND_FRAME_INTERVAL = 5;
@@ -356,7 +357,7 @@ const DirectXRFrameCapture_SessionLoop = () => {
 };
 
 // Scene component with WebXR functionality
-const Scene = () => {
+const Scenealt = () => {
   const cubeRef = useRef<THREE.Mesh>(null);
   
   // Animation loop for the cube (R3F's useFrame is fine for scene updates)
@@ -369,8 +370,7 @@ const Scene = () => {
 
   return (
     <>
-      <XRSessionStatus />
-      <DirectXRFrameCapture_SessionLoop /> {/* <-- Use the session rAF capture */}
+
       <gridHelper args={[10, 10]} />
       <ambientLight intensity={0.5} />
       <mesh ref={cubeRef} position={[0, 0, -2]} scale={0.5}> {/* Adjusted position/scale */}
@@ -417,6 +417,8 @@ const AppContent = () => {
         style={{ position: 'absolute', top: 0, left: 0 }}
       >
         <XR store={xrStore}>
+          <XRSessionStatus />
+          <DirectXRFrameCapture_SessionLoop /> {/* <-- Use the session rAF capture */}
           <Scene />
         </XR>
       </Canvas>
