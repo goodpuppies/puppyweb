@@ -17,7 +17,7 @@ const CAPTURE_HEIGHT = 480;
 const xrDevice = new XRDevice(metaQuest3, {
   stereoEnabled: true,
   //ipd: 0.90,
-  //fovy?
+  fovy: 2
 });
 xrDevice.installRuntime();
 
