@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, createContext, useContext, useCallback } from 'react';
 import * as THREE from 'three';
 import { useXR } from '@react-three/xr';
 import { createXRStore } from '@react-three/xr';
@@ -17,26 +17,39 @@ type WebSocketContextType = {
   ws: Worker | null; 
   status: string;
   setStatus: (status: string) => void;
-  sendFrame: (width: number, height: number, pixels: Uint8Array, timestamp: number) => void;
+  sendFrame: (width: number, height: number, pixels: Uint8Array, timestamp: number, poseTimestamp?: number, poseId?: number) => void;
+  latestPoseTimestamp: number | null;
+  setLatestPoseTimestamp: (timestamp: number) => void;
+  latestPoseId: number | null;
+  setLatestPoseId: (id: number) => void;
 };
 
 // Create the context with default values
-const WebSocketContext = React.createContext<WebSocketContextType>({
+const WebSocketContext = createContext<WebSocketContextType>({
   ws: null,
   status: 'Connecting',
   setStatus: () => {},
-  sendFrame: () => {}
+  sendFrame: () => {},
+  latestPoseTimestamp: null,
+  setLatestPoseTimestamp: () => {},
+  latestPoseId: null,
+  setLatestPoseId: () => {}
 });
 
 // WebSocket provider component
 export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [worker, setWorker] = useState<Worker | null>(null);
   const [status, setStatus] = useState('Connecting');
+  const [latestPoseTimestamp, setLatestPoseTimestamp] = useState<number | null>(null);
+  const [latestPoseId, setLatestPoseId] = useState<number | null>(null);
   const isConnected = useRef(false);
 
   // Create a function to send frames through the worker
-  const sendFrame = (width: number, height: number, pixels: Uint8Array, timestamp: number) => {
+  const sendFrame = useCallback((width: number, height: number, pixels: Uint8Array, timestamp: number, poseTimestamp?: number, poseId?: number) => {
     if (worker && isConnected.current) {
+      const actualPoseTimestamp = poseTimestamp || latestPoseTimestamp || timestamp;
+      const actualPoseId = poseId || latestPoseId || 0;
+      
       const pixelsCopy = new Uint8Array(pixels);
       
       worker.postMessage({
@@ -44,10 +57,12 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         width,
         height,
         pixels: pixelsCopy,
-        timestamp
+        timestamp,
+        poseTimestamp: actualPoseTimestamp,
+        poseId: actualPoseId
       } as WorkerIncomingMessage, [pixelsCopy.buffer]);
     }
-  };
+  }, [worker, isConnected, latestPoseTimestamp, latestPoseId]);
 
   useEffect(() => {
     const newWorker = new Worker(workerUrl);
@@ -87,6 +102,8 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
             }
             
             setXRDeviceTransform(message.matrix);
+            setLatestPoseTimestamp(message.timestamp);
+            setLatestPoseId(message.poseId);
           }
           break;
           
@@ -112,7 +129,7 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   }, []);
 
   return (
-    <WebSocketContext.Provider value={{ ws: worker, status, setStatus, sendFrame }}>
+    <WebSocketContext.Provider value={{ ws: worker, status, setStatus, sendFrame, latestPoseTimestamp, setLatestPoseTimestamp, latestPoseId, setLatestPoseId }}>
       {children}
     </WebSocketContext.Provider>
   );

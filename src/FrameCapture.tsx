@@ -9,7 +9,7 @@ const DOWNSAMPLE_FACTOR = 0.7; // Reduce resolution by this factor (0.5 = half w
 const USE_DOWNSAMPLING = true; // Set to true to enable downsampling
 
 export const DirectXRFrameCapture_SessionLoop = () => {
-  const { ws, sendFrame } = useWebSocket();
+  const { ws, sendFrame, latestPoseTimestamp, latestPoseId } = useWebSocket();
   const session = useXR(state => state.session);
   const { gl } = useThree();
 
@@ -127,11 +127,14 @@ export const DirectXRFrameCapture_SessionLoop = () => {
         );
         
         // Send the downsampled image using the sendFrame method from context
+        // Include both pose timestamp and ID for exact pose matching
         sendFrame(
           downsampledWidthRef.current,
           downsampledHeightRef.current,
           downsampledPixelsRef.current,
-          frameStartTime // Pass timestamp
+          frameStartTime, // Frame timestamp
+          latestPoseTimestamp, // Pose timestamp
+          latestPoseId // Pose ID for exact matching
         );
       } else {
         // Send the original image if downsampling is disabled
@@ -139,7 +142,9 @@ export const DirectXRFrameCapture_SessionLoop = () => {
           currentWidthRef.current,
           currentHeightRef.current,
           pixelsRef.current,
-          frameStartTime // Pass timestamp
+          frameStartTime, // Frame timestamp
+          latestPoseTimestamp, // Pose timestamp
+          latestPoseId // Pose ID for exact matching
         );
       }
     } else if (errorMsg) {

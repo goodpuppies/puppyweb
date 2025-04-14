@@ -4,7 +4,7 @@
 export type WorkerIncomingMessage = 
   | { type: 'connect', url: string }
   | { type: 'close' }
-  | { type: 'sendFrame', width: number, height: number, pixels: Uint8Array, timestamp: number }
+  | { type: 'sendFrame', width: number, height: number, pixels: Uint8Array, timestamp: number, poseTimestamp?: number, poseId?: number }
   | { type: 'setAutoStartXR', autoStart: boolean };
 
 export type WorkerOutgoingMessage =
@@ -12,13 +12,14 @@ export type WorkerOutgoingMessage =
   | { type: 'disconnected' }
   | { type: 'error', error: string }
   | { type: 'message', data: any }
-  | { type: 'hmdPose', timestamp: number, matrix: number[][] };
+  | { type: 'hmdPose', timestamp: number, poseId: number, matrix: number[][] };
 
 // The actual worker code
 const workerCode = () => {
   // WebSocket instance
   let ws: WebSocket | null = null;
   let latestTimestamp = 0;
+  let latestPoseId: number | null = null;
   
   // Handle messages from the main thread
   self.onmessage = (event: MessageEvent<WorkerIncomingMessage>) => {
@@ -56,21 +57,25 @@ const workerCode = () => {
               // Check if it's an HMD pose message
               if (data.mDeviceToAbsoluteTracking) {
                 const timestamp = data.timestamp || 0;
+                const poseId = data.id || 0;
                 
                 // Only forward the latest pose
                 if (timestamp > latestTimestamp || !data.timestamp) {
-                  if (data.timestamp) {
-                    latestTimestamp = data.timestamp;
-                  }
+                  latestTimestamp = timestamp;
+                  latestPoseId = poseId;
                   
-                  // Extract the matrix for more efficient transfer
-                  const matrix = data.mDeviceToAbsoluteTracking.m;
+                  // Extract the rotation matrix for use in the frontend
+                  const matrix = [
+                    [data.mDeviceToAbsoluteTracking.m[0][0], data.mDeviceToAbsoluteTracking.m[0][1], data.mDeviceToAbsoluteTracking.m[0][2], data.mDeviceToAbsoluteTracking.m[0][3]],
+                    [data.mDeviceToAbsoluteTracking.m[1][0], data.mDeviceToAbsoluteTracking.m[1][1], data.mDeviceToAbsoluteTracking.m[1][2], data.mDeviceToAbsoluteTracking.m[1][3]],
+                    [data.mDeviceToAbsoluteTracking.m[2][0], data.mDeviceToAbsoluteTracking.m[2][1], data.mDeviceToAbsoluteTracking.m[2][2], data.mDeviceToAbsoluteTracking.m[2][3]]
+                  ];
                   
-                  // Send the HMD pose to the main thread
-                  self.postMessage({
-                    type: 'hmdPose',
-                    timestamp,
-                    matrix
+                  self.postMessage({ 
+                    type: 'hmdPose', 
+                    timestamp, 
+                    poseId,
+                    matrix 
                   } as WorkerOutgoingMessage);
                 }
               } else {
@@ -104,14 +109,16 @@ const workerCode = () => {
         // Send frame data over WebSocket
         if (ws && ws.readyState === WebSocket.OPEN) {
           try {
-            const { width, height, pixels, timestamp } = message;
+            const { width, height, pixels, timestamp, poseTimestamp, poseId } = message;
             
-            // Create metadata buffer with width, height, timestamp (16 bytes total)
-            const metadataBuffer = new ArrayBuffer(16);
+            // Create metadata buffer with width, height, timestamp, poseTimestamp, poseId (32 bytes total)
+            const metadataBuffer = new ArrayBuffer(32);
             const metadataView = new DataView(metadataBuffer);
             metadataView.setUint32(0, width, true); // littleEndian = true
             metadataView.setUint32(4, height, true); // littleEndian = true
             metadataView.setFloat64(8, timestamp, true); // Add timestamp (Float64, littleEndian)
+            metadataView.setFloat64(16, poseTimestamp || timestamp, true); // Add pose timestamp or fallback to frame timestamp
+            metadataView.setFloat64(24, poseId || latestPoseId || 0, true); // Add pose ID (very important for synchronization)
             
             // Create the final message: metadata + pixel data
             const frameData = new Uint8Array(metadataBuffer.byteLength + pixels.byteLength);
