@@ -17,7 +17,7 @@ type WebSocketContextType = {
   ws: Worker | null; 
   status: string;
   setStatus: (status: string) => void;
-  sendFrame: (width: number, height: number, pixels: Uint8Array) => void;
+  sendFrame: (width: number, height: number, pixels: Uint8Array, timestamp: number) => void;
 };
 
 // Create the context with default values
@@ -35,7 +35,7 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const isConnected = useRef(false);
 
   // Create a function to send frames through the worker
-  const sendFrame = (width: number, height: number, pixels: Uint8Array) => {
+  const sendFrame = (width: number, height: number, pixels: Uint8Array, timestamp: number) => {
     if (worker && isConnected.current) {
       const pixelsCopy = new Uint8Array(pixels);
       
@@ -43,7 +43,8 @@ export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         type: 'sendFrame',
         width,
         height,
-        pixels: pixelsCopy
+        pixels: pixelsCopy,
+        timestamp
       } as WorkerIncomingMessage, [pixelsCopy.buffer]);
     }
   };
@@ -154,11 +155,11 @@ export const useWebSocket = () => {
   return context;
 };
 
-export const sendFrameData = (width: number, height: number, pixels: Uint8Array, ws: Worker) => {
+export const sendFrameData = (width: number, height: number, pixels: Uint8Array, timestamp: number, ws: Worker) => {
   if (!ws) return;
   
   const context = React.useContext(WebSocketContext);
-  context.sendFrame(width, height, pixels);
+  context.sendFrame(width, height, pixels, timestamp);
 };
 
 export const StatusIndicator = ({ status }: { status: string }) => {

@@ -25,6 +25,9 @@ export const DirectXRFrameCapture_SessionLoop = () => {
 
   // The core capture logic, designed to run inside requestAnimationFrame
   const captureFrame = (_timestamp: DOMHighResTimeStamp, xrFrame: XRFrame | undefined) => {
+    // Capture the timestamp as early as possible
+    const frameStartTime = Date.now();
+    
     // Re-request the next frame immediately
     frameIdRef.current = session?.requestAnimationFrame(captureFrame) ?? null;
 
@@ -125,14 +128,16 @@ export const DirectXRFrameCapture_SessionLoop = () => {
         sendFrame(
           downsampledWidthRef.current,
           downsampledHeightRef.current,
-          downsampledPixelsRef.current
+          downsampledPixelsRef.current,
+          frameStartTime // Pass timestamp
         );
       } else {
         // Send the original image if downsampling is disabled
         sendFrame(
           currentWidthRef.current,
           currentHeightRef.current,
-          pixelsRef.current
+          pixelsRef.current,
+          frameStartTime // Pass timestamp
         );
       }
     } else if (errorMsg) {

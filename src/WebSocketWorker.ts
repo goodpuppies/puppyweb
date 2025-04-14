@@ -4,7 +4,7 @@
 export type WorkerIncomingMessage = 
   | { type: 'connect', url: string }
   | { type: 'close' }
-  | { type: 'sendFrame', width: number, height: number, pixels: Uint8Array }
+  | { type: 'sendFrame', width: number, height: number, pixels: Uint8Array, timestamp: number }
   | { type: 'setAutoStartXR', autoStart: boolean };
 
 export type WorkerOutgoingMessage =
@@ -104,13 +104,14 @@ const workerCode = () => {
         // Send frame data over WebSocket
         if (ws && ws.readyState === WebSocket.OPEN) {
           try {
-            const { width, height, pixels } = message;
+            const { width, height, pixels, timestamp } = message;
             
-            // Create metadata buffer with width, height (8 bytes total)
-            const metadataBuffer = new ArrayBuffer(8);
+            // Create metadata buffer with width, height, timestamp (16 bytes total)
+            const metadataBuffer = new ArrayBuffer(16);
             const metadataView = new DataView(metadataBuffer);
             metadataView.setUint32(0, width, true); // littleEndian = true
             metadataView.setUint32(4, height, true); // littleEndian = true
+            metadataView.setFloat64(8, timestamp, true); // Add timestamp (Float64, littleEndian)
             
             // Create the final message: metadata + pixel data
             const frameData = new Uint8Array(metadataBuffer.byteLength + pixels.byteLength);
