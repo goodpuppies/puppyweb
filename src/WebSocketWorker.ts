@@ -21,7 +21,7 @@ const workerCode = () => {
   let latestTimestamp = 0;
   
   // Handle messages from the main thread
-  self.onmessage = async (event: MessageEvent<WorkerIncomingMessage>) => {
+  self.onmessage = (event: MessageEvent<WorkerIncomingMessage>) => {
     const message = event.data;
     
     switch (message.type) {
@@ -106,30 +106,18 @@ const workerCode = () => {
           try {
             const { width, height, pixels } = message;
             
-            // Create metadata buffer with width, height, byte length
-            const metadataBuffer = new ArrayBuffer(16);
+            // Create metadata buffer with width, height (8 bytes total)
+            const metadataBuffer = new ArrayBuffer(8);
             const metadataView = new DataView(metadataBuffer);
-            metadataView.setUint32(0, width, true);
-            metadataView.setUint32(4, height, true);
-            metadataView.setUint32(8, pixels.byteLength, true);
-            metadataView.setUint32(12, 1, true); // Chunk count always 1
+            metadataView.setUint32(0, width, true); // littleEndian = true
+            metadataView.setUint32(4, height, true); // littleEndian = true
             
-            // Create chunk size buffer
-            const chunkSizeBuffer = new ArrayBuffer(4);
-            const chunkSizeView = new DataView(chunkSizeBuffer);
-            chunkSizeView.setUint32(0, pixels.byteLength, true);
-            
-            // Create the final message
-            const frameData = new Uint8Array(
-              metadataBuffer.byteLength + 
-              chunkSizeBuffer.byteLength + 
-              pixels.byteLength
-            );
+            // Create the final message: metadata + pixel data
+            const frameData = new Uint8Array(metadataBuffer.byteLength + pixels.byteLength);
             
             // Copy data into the final buffer
             frameData.set(new Uint8Array(metadataBuffer), 0);
-            frameData.set(new Uint8Array(chunkSizeBuffer), metadataBuffer.byteLength);
-            frameData.set(pixels, metadataBuffer.byteLength + chunkSizeBuffer.byteLength);
+            frameData.set(pixels, metadataBuffer.byteLength);
             
             // Send the message
             ws.send(frameData);
