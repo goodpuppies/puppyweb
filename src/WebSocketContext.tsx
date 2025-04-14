@@ -18,9 +18,9 @@ type WebSocketContextType = {
   status: string;
   setStatus: (status: string) => void;
   sendFrame: (width: number, height: number, pixels: Uint8Array, timestamp: number, poseTimestamp?: number, poseId?: number) => void;
-  latestPoseTimestamp: number | null;
+  latestPoseTimestamp: number | undefined;
   setLatestPoseTimestamp: (timestamp: number) => void;
-  latestPoseId: number | null;
+  latestPoseId: number | undefined;
   setLatestPoseId: (id: number) => void;
 };
 
@@ -30,9 +30,9 @@ const WebSocketContext = createContext<WebSocketContextType>({
   status: 'Connecting',
   setStatus: () => {},
   sendFrame: () => {},
-  latestPoseTimestamp: null,
+  latestPoseTimestamp: undefined,
   setLatestPoseTimestamp: () => {},
-  latestPoseId: null,
+  latestPoseId: undefined,
   setLatestPoseId: () => {}
 });
 
@@ -40,8 +40,8 @@ const WebSocketContext = createContext<WebSocketContextType>({
 export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [worker, setWorker] = useState<Worker | null>(null);
   const [status, setStatus] = useState('Connecting');
-  const [latestPoseTimestamp, setLatestPoseTimestamp] = useState<number | null>(null);
-  const [latestPoseId, setLatestPoseId] = useState<number | null>(null);
+  const [latestPoseTimestamp, setLatestPoseTimestamp] = useState<number | undefined>(undefined);
+  const [latestPoseId, setLatestPoseId] = useState<number | undefined>(undefined);
   const isConnected = useRef(false);
 
   // Create a function to send frames through the worker

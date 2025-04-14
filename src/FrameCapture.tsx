@@ -4,8 +4,8 @@ import { useXR } from '@react-three/xr';
 import { useWebSocket } from './WebSocketContext.tsx';
 
 // Configuration options
-const SEND_FRAME_INTERVAL = 0; // 0 means send every frame, 1+ means send every Nth frame
-const DOWNSAMPLE_FACTOR = 0.7; // Reduce resolution by this factor (0.5 = half width/height = 1/4 total pixels)
+const SEND_FRAME_INTERVAL = 2; // 0 means send every frame, 1+ means send every Nth frame
+const DOWNSAMPLE_FACTOR = 0.9; // Reduce resolution by this factor (0.5 = half width/height = 1/4 total pixels)
 const USE_DOWNSAMPLING = true; // Set to true to enable downsampling
 
 export const DirectXRFrameCapture_SessionLoop = () => {
