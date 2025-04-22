@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, createContext, useContext, useCallback } from 'react';
+import React, { useState, useEffect, createContext, useContext, useCallback } from 'react';
 import * as THREE from 'three';
 import { useXR } from '@react-three/xr';
 import { createXRStore } from '@react-three/xr';

@@ -4,8 +4,8 @@ import { useXR } from '@react-three/xr';
 import { useIpc } from './IPCContext.tsx';
 
 // Configuration options
-const SEND_FRAME_INTERVAL = 12; // 0 means send every frame, 1+ means send every Nth frame
-const DOWNSAMPLE_FACTOR = 0.9; // Reduce resolution by this factor (0.5 = half width/height = 1/4 total pixels)
+const SEND_FRAME_INTERVAL = 2; // 0 means send every frame, 1+ means send every Nth frame
+const DOWNSAMPLE_FACTOR = 0.4; // Reduce resolution by this factor (0.5 = half width/height = 1/4 total pixels)
 const USE_DOWNSAMPLING = true; // Set to true to enable downsampling
 
 export const DirectXRFrameCapture_SessionLoop = () => {
@@ -26,7 +26,6 @@ export const DirectXRFrameCapture_SessionLoop = () => {
   // The core capture logic, designed to run inside requestAnimationFrame
   const captureFrame = (_timestamp: DOMHighResTimeStamp, xrFrame: XRFrame | undefined) => {
     // Capture the timestamp as early as possible
-    const frameStartTime = Date.now();
     
     // Re-request the next frame immediately
     frameIdRef.current = session?.requestAnimationFrame(captureFrame) ?? null;

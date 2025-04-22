@@ -16,7 +16,7 @@
         "title": "denotauri",
         "width": 1920,
         "height": 1080,
-        "visible": true
+        "visible": false
       }
     ],
     "security": {
