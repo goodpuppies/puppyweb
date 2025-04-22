@@ -7,45 +7,29 @@ import { core } from '@tauri-apps/api';
 export const AUTO_START_XR = true;
 export const xrStore = createXRStore();
 
-// Track the latest timestamp for pose data
-let lastPoseTimestamp = 0;
-
 // IPC context type definition
 export type IpcContextType = {
   status: string;
   setStatus: (status: string) => void;
-  sendFrame: (width: number, height: number, pixels: Uint8Array, timestamp: number, poseTimestamp?: number, poseId?: number) => void;
-  latestPoseTimestamp: number | undefined;
-  setLatestPoseTimestamp: (timestamp: number) => void;
-  latestPoseId: number | undefined;
-  setLatestPoseId: (id: number) => void;
+  sendFrame: (width: number, height: number, pixels: Uint8Array) => void;
 };
 
 // Create the context with default values
 const IpcContext = createContext<IpcContextType>({
   status: 'Idle',
   setStatus: () => {},
-  sendFrame: () => {},
-  latestPoseTimestamp: undefined,
-  setLatestPoseTimestamp: () => {},
-  latestPoseId: undefined,
-  setLatestPoseId: () => {}
+  sendFrame: () => {}
 });
 
 // IPC provider component (no worker)
 export const IpcProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [status, setStatus] = useState('Idle');
-  const [latestPoseTimestamp, setLatestPoseTimestamp] = useState<number | undefined>(undefined);
-  const [latestPoseId, setLatestPoseId] = useState<number | undefined>(undefined);
 
   // Send frame directly via Tauri IPC
-  const sendFrame = useCallback((width: number, height: number, pixels: Uint8Array, timestamp: number, poseTimestamp?: number, poseId?: number) => {
+  const sendFrame = useCallback((width: number, height: number, pixels: Uint8Array) => {
     const meta = {
       width,
-      height,
-      timestamp,
-      poseTimestamp: poseTimestamp ?? latestPoseTimestamp ?? timestamp,
-      poseId: poseId ?? latestPoseId ?? 0
+      height
     };
     core.invoke('upload', pixels, {
       headers: {
@@ -57,10 +41,32 @@ export const IpcProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setStatus('Error');
       console.error('IPC Error:', err, meta);
     });
-  }, [latestPoseTimestamp, latestPoseId]);
+  }, []);
+
+  // Effect for Auto Starting XR
+  useEffect(() => {
+    if (AUTO_START_XR) {
+      console.log("IPC Provider mounted, attempting to auto-start XR...");
+      // Use a timeout to give other systems a chance to initialize
+      const timerId = setTimeout(() => {
+        console.log("Calling xrStore.enterAR()...");
+        // Make sure enterAR exists and is callable
+        if (typeof xrStore.enterAR === 'function') {
+             xrStore.enterAR().catch(err => {
+                console.error("Failed to auto-enter AR:", err);
+                setStatus('Error Starting XR'); // Update status on failure
+             });
+        } else {
+            console.error("xrStore.enterAR is not a function. Cannot auto-start XR.");
+        }
+      }, 1000); // 1 second delay
+
+      return () => clearTimeout(timerId); // Cleanup timeout on unmount
+    }
+  }, []); // Empty dependency array ensures this runs only once on mount
 
   return (
-    <IpcContext.Provider value={{ status, setStatus, sendFrame, latestPoseTimestamp, setLatestPoseTimestamp, latestPoseId, setLatestPoseId }}>
+    <IpcContext.Provider value={{ status, setStatus, sendFrame }}>
       {children}
     </IpcContext.Provider>
   );
@@ -103,11 +109,6 @@ function setXRDeviceTransform(matrix: number[][]) {
     throw new Error(`Failed to apply XR transform: ${error}`);
   }
 }
-
-export const sendFrameData = (width: number, height: number, pixels: Uint8Array, timestamp: number) => {
-  const context = useContext(IpcContext);
-  context.sendFrame(width, height, pixels, timestamp);
-};
 
 export const StatusIndicator = ({ status }: { status: string }) => {
   return (

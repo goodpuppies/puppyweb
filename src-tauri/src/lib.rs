@@ -5,15 +5,27 @@
 )]
 
 // --- Add necessary imports ---
-use parking_lot::Mutex; // Or std::sync::Mutex
-use std::{fs::{File, OpenOptions}, io::{self, Write}, sync::Arc};
+use byteorder::{LittleEndian, WriteBytesExt}; // Needed for binary writing
+use parking_lot::Mutex;
+use serde::Deserialize; // Needed for JSON deserialization
+use std::{
+    fs::{File, OpenOptions},
+    io::{self, Cursor, Write}, // Cursor needed for in-memory writing
+    sync::Arc,
+};
 use tauri::State;
 
 // --- Define the state struct to hold the pipe connection ---
 pub struct PipeState {
-    // Arc<Mutex<...>> allows sharing across threads safely
-    // Option<File> allows the connection to be initially None or become None if broken
     pipe: Arc<Mutex<Option<File>>>,
+}
+
+// --- Define struct to deserialize the Frame Meta JSON ---
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")] // Match JS camelCase
+struct FrameMeta {
+    width: u32,
+    height: u32,
 }
 
 impl PipeState {
@@ -34,7 +46,7 @@ impl PipeState {
 
         // If not connected (or clone failed), try to connect
         println!("[TAURI IPC] Attempting to connect to named pipe...");
-        const PIPE_PATH: &str = r"\\.\pipe\your-own-name";
+        const PIPE_PATH: &str = r"\\.\pipe\petplay-ipc-frames";
         match OpenOptions::new().write(true).open(PIPE_PATH) {
             Ok(file) => {
                 println!("[TAURI IPC] Connected to named pipe.");
@@ -49,9 +61,9 @@ impl PipeState {
         }
     }
 
-    // Helper function to write framed data
+    // Helper function to write framed data (accepts pre-built Vec<u8>)
     // Tries to connect/reconnect if necessary
-    fn write_framed_data(&self, data: &[u8]) -> io::Result<()> {
+    fn write_prepared_data(&self, data: &[u8]) -> io::Result<()> { // Renamed for clarity
         let mut attempts = 0;
         loop {
             attempts += 1;
@@ -78,18 +90,55 @@ impl PipeState {
 #[tauri::command]
 fn upload(
     request: tauri::ipc::Request,
-    pipe_state: State<'_, PipeState> // Inject the state
+    pipe_state: State<'_, PipeState>, // Inject the state
 ) -> Result<(), String> {
-    let tauri::ipc::InvokeBody::Raw(upload_data) = request.body() else {
+    // --- 1. Extract Pixel Data ---
+    let tauri::ipc::InvokeBody::Raw(pixel_data) = request.body() else {
         return Err("RequestBodyMustBeRaw".to_string());
     };
-    let _meta = request.headers().get("X-Frame-Meta"); // Keep meta for potential logging
 
-    // Use the state's helper to write framed data
-    match pipe_state.write_framed_data(&upload_data) {
+    // --- 2. Extract and Parse Metadata Header ---
+    let meta_header = request
+        .headers()
+        .get("X-Frame-Meta")
+        .ok_or_else(|| "MissingXFrameMetaHeader".to_string())?; // Error if header missing
+
+    let meta_str = meta_header
+        .to_str()
+        .map_err(|e| format!("HeaderToStrError: {}", e))?; // Error if not valid UTF-8
+
+    let meta: FrameMeta = serde_json::from_str(meta_str)
+        .map_err(|e| format!("JsonParseError: {}", e))?; // Error if JSON invalid
+
+    // --- 3. Construct the Full Payload (Metadata + Pixels) ---
+    // Expected Size: 4(w) + 4(h) + pixels.len()
+    let header_size = 4 + 4;
+    let total_size = header_size + pixel_data.len();
+    let mut final_payload = Vec::with_capacity(total_size);
+
+    // Use Cursor to write binary data in memory easily
+    let mut writer = Cursor::new(&mut final_payload);
+
+    writer
+        .write_u32::<LittleEndian>(meta.width)
+        .map_err(|e| format!("WriteErrorWidth: {}", e))?;
+    writer
+        .write_u32::<LittleEndian>(meta.height)
+        .map_err(|e| format!("WriteErrorHeight: {}", e))?;
+
+    // Append pixel data directly
+    writer
+        .write_all(&pixel_data)
+        .map_err(|e| format!("WriteErrorPixels: {}", e))?;
+
+    // Drop the cursor to release the borrow on final_payload if needed, though it goes out of scope anyway.
+    // drop(writer); // Not strictly necessary here
+
+    // --- 4. Write the combined payload to the pipe ---
+    match pipe_state.write_prepared_data(&final_payload) {
         Ok(_) => {
-            // Optional: Log success less frequently? Or only size?
-            //println!("[TAURI IPC] Forwarded frame ({} bytes) via persistent pipe.", upload_data.len());
+             // Optional: Log success less frequently? Or only size?
+             // println!("[TAURI IPC] Forwarded frame ({} bytes total) via pipe.", final_payload.len());
             Ok(())
         }
         Err(e) => {
@@ -99,6 +148,7 @@ fn upload(
         }
     }
 }
+
 
 #[tauri::command]
 fn greet(name: &str) -> String {
