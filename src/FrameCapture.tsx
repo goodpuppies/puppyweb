@@ -1,7 +1,7 @@
 import { useRef, useEffect } from 'react';
 import { useThree } from '@react-three/fiber';
 import { useXR } from '@react-three/xr';
-import { useWebSocket } from './WebSocketContext.tsx';
+import { useIpc } from './IPCContext.tsx';
 
 // Configuration options
 const SEND_FRAME_INTERVAL = 2; // 0 means send every frame, 1+ means send every Nth frame
@@ -9,7 +9,7 @@ const DOWNSAMPLE_FACTOR = 0.9; // Reduce resolution by this factor (0.5 = half w
 const USE_DOWNSAMPLING = true; // Set to true to enable downsampling
 
 export const DirectXRFrameCapture_SessionLoop = () => {
-  const { ws, sendFrame, latestPoseTimestamp, latestPoseId } = useWebSocket();
+  const { sendFrame, latestPoseTimestamp, latestPoseId } = useIpc();
   const session = useXR(state => state.session);
   const { gl } = useThree();
 
@@ -33,7 +33,7 @@ export const DirectXRFrameCapture_SessionLoop = () => {
 
     frameCounterRef.current++;
 
-    if (!session || !ws || !xrFrame) {
+    if (!session || !xrFrame) {
       return;
     }
 

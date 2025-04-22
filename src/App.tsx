@@ -4,12 +4,12 @@ import { XR } from '@react-three/xr';
 import { XRDevice, metaQuest3 } from 'iwer';
 import { Scene } from './Scene.tsx'
 import { 
-  WebSocketProvider, 
+  IpcProvider, 
   StatusIndicator, 
   XRSessionStatus, 
   xrStore,
-  useWebSocket
-} from './WebSocketContext.tsx';
+  useIpc
+} from './IPCContext.tsx';
 import { DirectXRFrameCapture_SessionLoop } from './FrameCapture.tsx';
 
 const xrDevice = new XRDevice(metaQuest3, {
@@ -24,14 +24,14 @@ window.xrDevice = xrDevice;
 
 const App = () => {
   return (
-    <WebSocketProvider>
+    <IpcProvider>
       <AppContent />
-    </WebSocketProvider>
+    </IpcProvider>
   );
 };
 
 const AppContent = () => {
-  const { status } = useWebSocket();
+  const { status } = useIpc();
   return (
     <>
       <StatusIndicator status={status} />
