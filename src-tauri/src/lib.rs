@@ -80,9 +80,14 @@ impl FramePipeState {
 // Modify send_frame_data to be async and use the Tokio Mutex/Pipe
 #[tauri::command(async)] // Make the command async
 async fn send_frame_data(
-    state: State<'_, FramePipeState>,
-    payload: Vec<u8>, // Accept a single byte payload
+    request: tauri::ipc::Request<'_>, // Accept the full request
+    state: State<'_, FramePipeState>, // Keep the state
 ) -> Result<(), String> {
+    // --- Extract Raw Payload Data --- 
+    let tauri::ipc::InvokeBody::Raw(payload) = request.body() else {
+        return Err("RequestBodyMustBeRaw".to_string());
+    };
+
     // Ensure the payload is large enough for the header
     if payload.len() < 8 {
         return Err("Payload too small for header".to_string());
@@ -90,27 +95,22 @@ async fn send_frame_data(
 
     // Parse width and height from the header
     let mut cursor = Cursor::new(&payload[..8]);
-    let width = match ReadBytesExt::read_u32::<LittleEndian>(&mut cursor) {
+    let _width = match ReadBytesExt::read_u32::<LittleEndian>(&mut cursor) { // Keep parsing for potential logging/validation
         Ok(w) => w,
         Err(e) => return Err(format!("Failed to read width from payload: {}", e)),
     };
-    let height = match ReadBytesExt::read_u32::<LittleEndian>(&mut cursor) {
+    let _height = match ReadBytesExt::read_u32::<LittleEndian>(&mut cursor) { // Keep parsing
         Ok(h) => h,
         Err(e) => return Err(format!("Failed to read height from payload: {}", e)),
     };
 
-    // The rest of the payload is the image data
-    let data = &payload[8..];
+    // The rest of the payload is the image data (variable not strictly needed if writing full payload)
+    // let _data = &payload[8..]; // Prefix unused variable
 
     // Lock the mutex asynchronously
     let mut pipe_guard = state.pipe_writer.lock().await;
 
     if let Some(writer) = pipe_guard.as_mut() {
-        // Prepare header (4 bytes width, 4 bytes height) - reuse parsed values for consistency check if needed
-        // Or just write the original payload directly if the receiver expects header + data
-        // Let's assume the receiver expects the header *and* data combined, as sent by frontend.
-        // If the receiver ONLY wants raw pixel data, we'd write `data` instead of `payload`.
-
         // Write the *entire original payload* (header + data) to the pipe
         if let Err(e) = writer.write_all(&payload).await { // Write the full payload
             eprintln!("[Rust Frame Pipe] Error writing frame payload: {}. Disconnecting and attempting reconnect.", e);
@@ -121,7 +121,7 @@ async fn send_frame_data(
             return Err(format!("Error writing frame payload: {}", e));
         }
         // Optional: Log success with parsed dimensions
-        // println!("[Rust Frame Pipe] Sent frame payload: {}x{} ({} bytes data)", width, height, data.len());
+        // println!("[Rust Frame Pipe] Sent frame payload: {}x{} ({} bytes data)", _width, _height, payload.len() - 8);
         Ok(())
     } else {
         // eprintln!("[Rust Frame Pipe] Send failed: Not connected.");
