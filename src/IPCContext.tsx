@@ -27,19 +27,28 @@ export const IpcProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Send frame directly via Tauri IPC
   const sendFrame = useCallback((width: number, height: number, pixels: Uint8Array) => {
-    const meta = {
-      width,
-      height
-    };
-    core.invoke('upload', pixels, {
-      headers: {
-        'X-Frame-Meta': JSON.stringify(meta)
-      }
-    }).then(() => {
+    // Create a buffer for metadata (width, height) + pixel data
+    const metaSize = 4 + 4; // u32 width + u32 height
+    const totalSize = metaSize + pixels.length;
+    const buffer = new ArrayBuffer(totalSize);
+    const view = new DataView(buffer);
+
+    // Write width and height as Little Endian Unsigned 32-bit integers
+    view.setUint32(0, width, true); // true for littleEndian
+    view.setUint32(4, height, true); // true for littleEndian
+
+    // Copy pixel data after the metadata
+    const framePayload = new Uint8Array(buffer);
+    framePayload.set(pixels, metaSize);
+
+    // Invoke the Tauri command with the combined payload
+    core.invoke('send_frame_data', framePayload) // Send the combined ArrayBuffer
+        .then(() => {
       // Optionally update status or log
+      // console.log(`Frame sent: ${width}x${height}`);
     }).catch((err) => {
       setStatus('Error');
-      console.error('IPC Error:', err, meta);
+      console.error('IPC Error sending frame:', err, { width, height });
     });
   }, []);
 
@@ -125,6 +134,7 @@ export const StatusIndicator = ({ status }: { status: string }) => {
 
 declare global {
   interface Window {
+    // deno-lint-ignore no-explicit-any
     xrDevice: any;
   }
 }

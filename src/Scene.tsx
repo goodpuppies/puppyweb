@@ -14,7 +14,7 @@ export const Scene = () => {
 
   return (
     <>
-      <gridHelper args={[10, 10]} visible={true} />
+      <gridHelper args={[10, 10]} visible />
       <ambientLight intensity={0.5} />
       <pointLight intensity={0.3} position={[0, 2, -1]} />
       <mesh ref={cubeRef} position={[0.16, 1.79, -2.92]} scale={0.68}> {/* Adjusted position/scale */}

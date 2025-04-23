@@ -5,168 +5,230 @@
 )]
 
 // --- Add necessary imports ---
-use byteorder::{LittleEndian, WriteBytesExt}; // Needed for binary writing
-use parking_lot::Mutex;
-use serde::Deserialize; // Needed for JSON deserialization
+use byteorder::{LittleEndian, ReadBytesExt}; 
 use std::{
-    fs::{File, OpenOptions},
-    io::{self, Cursor, Write}, // Cursor needed for in-memory writing
+    io::{self, Cursor}, 
     sync::Arc,
+    time::Duration, 
 };
 use tauri::State;
+// --- Tokio Imports ---
+use tokio::{
+    net::windows::named_pipe::{ClientOptions, NamedPipeClient}, 
+    io::{AsyncReadExt, AsyncWriteExt, BufReader}, 
+    runtime::Runtime,
+    sync::Mutex as TokioMutex, 
+    time::sleep,
+};
 
 // --- Define the state struct to hold the pipe connection ---
-pub struct PipeState {
-    pipe: Arc<Mutex<Option<File>>>,
+// Frame pipe state (now asynchronous)
+pub struct FramePipeState {
+    // Use Tokio's Mutex for async locking
+    // Store the write half of the pipe if connection is successful
+    pipe_writer: Arc<TokioMutex<Option<tokio::io::WriteHalf<NamedPipeClient>>>>,
+    // Use a handle to the Tokio runtime
+    rt: tokio::runtime::Handle,
 }
 
-// --- Define struct to deserialize the Frame Meta JSON ---
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")] // Match JS camelCase
-struct FrameMeta {
-    width: u32,
-    height: u32,
-}
+// --- Constants ---
+const FRAME_PIPE_PATH: &str = r"\\.\pipe\petplay-ipc-frames";
+const TRANSFORM_PIPE_PATH: &str = r"\\.\pipe\petplay-ipc-transform";
+const TRANSFORM_DATA_SIZE: usize = 16 * 4; // 16 floats * 4 bytes/float
 
-impl PipeState {
-    // Helper function to get or establish the pipe connection
-    fn get_or_connect(&self) -> io::Result<File> {
-        let mut pipe_guard = self.pipe.lock(); // Lock the mutex
-
-        // If already connected and valid, clone the file handle and return
-        if let Some(ref file) = *pipe_guard {
-             match file.try_clone() {
-                Ok(cloned_file) => return Ok(cloned_file),
-                Err(e) => {
-                    println!("[TAURI IPC] Failed to clone existing pipe handle, attempting reconnect: {}", e);
-                    *pipe_guard = None; // Invalidate the stored handle
-                }
-            }
-        }
-
-        // If not connected (or clone failed), try to connect
-        println!("[TAURI IPC] Attempting to connect to named pipe...");
-        const PIPE_PATH: &str = r"\\.\pipe\petplay-ipc-frames";
-        match OpenOptions::new().write(true).open(PIPE_PATH) {
-            Ok(file) => {
-                println!("[TAURI IPC] Connected to named pipe.");
-                let file_clone = file.try_clone()?; // Clone for returning
-                *pipe_guard = Some(file); // Store the original handle in the state
-                Ok(file_clone) // Return the clone
-            }
-            Err(e) => {
-                println!("[TAURI IPC] Failed to connect to named pipe: {}", e);
-                Err(e)
-            }
-        }
+impl FramePipeState {
+    // Initialize the state and spawn the connection loop
+    fn new(rt: tokio::runtime::Handle) -> Self {
+        let state = Self {
+            pipe_writer: Arc::new(TokioMutex::new(None)),
+            rt,
+        };
+        state.spawn_connection_loop();
+        state
     }
 
-    // Helper function to write framed data (accepts pre-built Vec<u8>)
-    // Tries to connect/reconnect if necessary
-    fn write_prepared_data(&self, data: &[u8]) -> io::Result<()> { // Renamed for clarity
-        let mut attempts = 0;
-        loop {
-            attempts += 1;
-            // Get a valid connection (or attempt to establish one)
-            let mut pipe_file = self.get_or_connect()?;
-
-            // Send frame data
-            match pipe_file.write_all(data) {
-                Ok(_) => return Ok(()), // Success!
-                Err(e) => {
-                    println!("[TAURI IPC] Error writing data to pipe: {}", e);
-                    // Invalidate the connection in state if write fails
-                    self.pipe.lock().take(); // Set Option to None
-                    if attempts >= 2 { return Err(e); } // Stop after 2 attempts
+    // Spawns the connection loop in the background
+    fn spawn_connection_loop(&self) {
+        let pipe_writer = Arc::clone(&self.pipe_writer);
+        self.rt.spawn(async move {
+            loop {
+                println!("[Rust Frame Pipe] Attempting to connect to frame pipe: {}", FRAME_PIPE_PATH);
+                match ClientOptions::new().open(FRAME_PIPE_PATH) {
+                    Ok(client) => {
+                        println!("[Rust Frame Pipe] Successfully connected to frame pipe.");
+                        let (_reader, writer) = tokio::io::split(client);
+                        let mut pipe_guard = pipe_writer.lock().await;
+                        *pipe_guard = Some(writer);
+                        // Basic disconnect monitoring: If a write fails later, the Option will be set back to None
+                        // and the connection loop can be restarted if needed.
+                        // For now, we just connect once.
+                        break; // Exit loop once connected.
+                    }
+                    Err(e) => {
+                        eprintln!("[Rust Frame Pipe] Failed to connect to frame pipe: {}. Retrying in 1 second...", e);
+                        sleep(Duration::from_secs(1)).await;
+                    }
                 }
             }
-            // If write failed, loop will try get_or_connect again (max 1 retry)
-            println!("[TAURI IPC] Retrying pipe write (attempt {})...", attempts + 1);
-        }
+        });
     }
 }
 
-// The Tauri command
-#[tauri::command]
-fn upload(
-    request: tauri::ipc::Request,
-    pipe_state: State<'_, PipeState>, // Inject the state
+
+// --- Tauri Commands ---
+
+// Modify send_frame_data to be async and use the Tokio Mutex/Pipe
+#[tauri::command(async)] // Make the command async
+async fn send_frame_data(
+    state: State<'_, FramePipeState>,
+    payload: Vec<u8>, // Accept a single byte payload
 ) -> Result<(), String> {
-    // --- 1. Extract Pixel Data ---
-    let tauri::ipc::InvokeBody::Raw(pixel_data) = request.body() else {
-        return Err("RequestBodyMustBeRaw".to_string());
+    // Ensure the payload is large enough for the header
+    if payload.len() < 8 {
+        return Err("Payload too small for header".to_string());
+    }
+
+    // Parse width and height from the header
+    let mut cursor = Cursor::new(&payload[..8]);
+    let width = match ReadBytesExt::read_u32::<LittleEndian>(&mut cursor) {
+        Ok(w) => w,
+        Err(e) => return Err(format!("Failed to read width from payload: {}", e)),
+    };
+    let height = match ReadBytesExt::read_u32::<LittleEndian>(&mut cursor) {
+        Ok(h) => h,
+        Err(e) => return Err(format!("Failed to read height from payload: {}", e)),
     };
 
-    // --- 2. Extract and Parse Metadata Header ---
-    let meta_header = request
-        .headers()
-        .get("X-Frame-Meta")
-        .ok_or_else(|| "MissingXFrameMetaHeader".to_string())?; // Error if header missing
+    // The rest of the payload is the image data
+    let data = &payload[8..];
 
-    let meta_str = meta_header
-        .to_str()
-        .map_err(|e| format!("HeaderToStrError: {}", e))?; // Error if not valid UTF-8
+    // Lock the mutex asynchronously
+    let mut pipe_guard = state.pipe_writer.lock().await;
 
-    let meta: FrameMeta = serde_json::from_str(meta_str)
-        .map_err(|e| format!("JsonParseError: {}", e))?; // Error if JSON invalid
+    if let Some(writer) = pipe_guard.as_mut() {
+        // Prepare header (4 bytes width, 4 bytes height) - reuse parsed values for consistency check if needed
+        // Or just write the original payload directly if the receiver expects header + data
+        // Let's assume the receiver expects the header *and* data combined, as sent by frontend.
+        // If the receiver ONLY wants raw pixel data, we'd write `data` instead of `payload`.
 
-    // --- 3. Construct the Full Payload (Metadata + Pixels) ---
-    // Expected Size: 4(w) + 4(h) + pixels.len()
-    let header_size = 4 + 4;
-    let total_size = header_size + pixel_data.len();
-    let mut final_payload = Vec::with_capacity(total_size);
-
-    // Use Cursor to write binary data in memory easily
-    let mut writer = Cursor::new(&mut final_payload);
-
-    writer
-        .write_u32::<LittleEndian>(meta.width)
-        .map_err(|e| format!("WriteErrorWidth: {}", e))?;
-    writer
-        .write_u32::<LittleEndian>(meta.height)
-        .map_err(|e| format!("WriteErrorHeight: {}", e))?;
-
-    // Append pixel data directly
-    writer
-        .write_all(&pixel_data)
-        .map_err(|e| format!("WriteErrorPixels: {}", e))?;
-
-    // Drop the cursor to release the borrow on final_payload if needed, though it goes out of scope anyway.
-    // drop(writer); // Not strictly necessary here
-
-    // --- 4. Write the combined payload to the pipe ---
-    match pipe_state.write_prepared_data(&final_payload) {
-        Ok(_) => {
-             // Optional: Log success less frequently? Or only size?
-             // println!("[TAURI IPC] Forwarded frame ({} bytes total) via pipe.", final_payload.len());
-            Ok(())
+        // Write the *entire original payload* (header + data) to the pipe
+        if let Err(e) = writer.write_all(&payload).await { // Write the full payload
+            eprintln!("[Rust Frame Pipe] Error writing frame payload: {}. Disconnecting and attempting reconnect.", e);
+            // Clear the writer to signal disconnection
+            *pipe_guard = None;
+            // Spawn a new connection attempt
+            state.spawn_connection_loop();
+            return Err(format!("Error writing frame payload: {}", e));
         }
-        Err(e) => {
-            println!("[TAURI IPC] Failed to forward frame via persistent pipe after retries: {}", e);
-            // Decide if this should be a frontend error or just logged
-            Err(format!("PipeWriteError: {}", e))
+        // Optional: Log success with parsed dimensions
+        // println!("[Rust Frame Pipe] Sent frame payload: {}x{} ({} bytes data)", width, height, data.len());
+        Ok(())
+    } else {
+        // eprintln!("[Rust Frame Pipe] Send failed: Not connected.");
+        Err("Frame pipe not connected".to_string())
+    }
+}
+
+// --- Transform Pipe Listener (ensure retry logic is similar) ---
+async fn transform_pipe_listener() {
+    loop {
+        println!("[Rust Transform Pipe] Attempting to connect to transform pipe: {}", TRANSFORM_PIPE_PATH);
+        match ClientOptions::new().open(TRANSFORM_PIPE_PATH) {
+            Ok(client) => {
+                println!("[Rust Transform Pipe] Successfully connected.");
+                let mut reader = BufReader::new(client);
+                // Pass the reader to a handler function
+                handle_transform_connection(&mut reader).await;
+                // If handle_transform_connection returns, it means the client disconnected
+                println!("[Rust Transform Pipe] Client disconnected. Attempting to reconnect...");
+            }
+            Err(e) => {
+                eprintln!("[Rust Transform Pipe] Failed to connect: {}. Retrying in 1 second...", e);
+                // Retry logic is already here
+                sleep(Duration::from_secs(1)).await;
+            }
         }
     }
 }
 
+// --- Handle Transform Data --- Reads until disconnection or error
+async fn handle_transform_connection<R: AsyncReadExt + Unpin>(reader: &mut R) {
+    let mut buffer = [0u8; TRANSFORM_DATA_SIZE];
+    loop {
+        match reader.read_exact(&mut buffer).await {
+            Ok(n) if n == TRANSFORM_DATA_SIZE => {
+                // --- Process the received transform data ---
+                let _matrix = deserialize_matrix(&buffer);
+                // TODO: Implement actual logic with the matrix
+                // For now, just print it (disabled for less noise)
+                // println!("[Rust Transform Pipe] Received Matrix: {:?}", matrix);
 
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
+                // Example: Call a function to update XR state
+                // update_xr_transform(matrix);
+            }
+            Ok(_) => {
+                // Incorrect number of bytes read, likely connection issue or bad data
+                eprintln!("[Rust Transform Pipe] Incomplete data read. Disconnecting.");
+                break; // Exit inner loop to reconnect
+            }
+            Err(ref e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                // This is the expected error when the client disconnects gracefully
+                println!("[Rust Transform Pipe] Client closed the connection.");
+                break; // Exit inner loop to reconnect
+            }
+            Err(e) => {
+                eprintln!("[Rust Transform Pipe] Error reading from pipe: {}. Disconnecting.", e);
+                break; // Exit inner loop to reconnect
+            }
+        }
+    }
 }
 
+ // Helper function to deserialize the matrix (assuming simple float array)
+ fn deserialize_matrix(buffer: &[u8]) -> Vec<f32> {
+    let mut matrix = Vec::with_capacity(16);
+    let mut cursor = Cursor::new(buffer);
+    for _ in 0..16 {
+        // Read f32 using byteorder
+        match ReadBytesExt::read_f32::<LittleEndian>(&mut cursor) { 
+             Ok(val) => matrix.push(val),
+             Err(e) => {
+                 eprintln!("[Rust Transform Pipe] Error deserializing matrix float: {}", e);
+                 // Handle error appropriately, maybe return an empty vec or default matrix
+                 return vec![0.0; 16]; // Return default on error
+             }
+         }
+    }
+    matrix
+}
+
+
+// --- Tauri Setup ---
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Create a Tokio runtime
+    let rt = Runtime::new().unwrap();
+    let rt_handle = rt.handle().clone(); // Get a handle to the runtime
+
     tauri::Builder::default()
-         // --- Manage the PipeState ---
-        .manage(PipeState { pipe: Arc::new(Mutex::new(None)) }) // Initialize state
-        .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet, upload])
-        .setup(|_app| {
-            // Print a message to indicate the app is running
-            println!("Tauri application running. Press Ctrl+C to exit.");
+        // Manage the FramePipeState and pass the runtime handle
+        .manage(FramePipeState::new(rt_handle.clone())) // Pass handle here
+        .setup(move |app| {
+            // Spawn the transform pipe listener using the runtime handle
+            let _app_handle = app.handle().clone(); // Use app handle if needed for events
+            let transform_rt_handle = rt_handle.clone(); // Clone handle for transform task
+             transform_rt_handle.spawn(async move {
+                 transform_pipe_listener().await;
+             });
+
+            // Frame pipe connection loop is now spawned within FramePipeState::new
+
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .invoke_handler(tauri::generate_handler![
+            send_frame_data,
+            // Add any other existing commands here
+        ])
+        .run(tauri::generate_context!()) // Ensure Cargo.toml has build metadata enabled
         .expect("error while running tauri application");
 }
