@@ -3,9 +3,15 @@ import * as THREE from 'three';
 import { useXR } from '@react-three/xr';
 import { createXRStore } from '@react-three/xr';
 import { core } from '@tauri-apps/api';
+import { listen } from '@tauri-apps/api/event';
 
 export const AUTO_START_XR = true;
 export const xrStore = createXRStore();
+
+// Define the payload type received from Rust
+type TransformUpdatePayload = {
+  matrix: number[]; // Flat 16-element array (f32)
+};
 
 // IPC context type definition
 export type IpcContextType = {
@@ -74,6 +80,49 @@ export const IpcProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, []); // Empty dependency array ensures this runs only once on mount
 
+  // Effect for listening to Transform Updates from Rust
+  useEffect(() => {
+    let unlistenTransform: (() => void) | undefined;
+
+    const setupListener = async () => {
+      try {
+        unlistenTransform = await listen<TransformUpdatePayload>('transform-update', (event) => {
+          // console.log('Received transform-update:', event.payload.matrix); // Debugging
+          const flatMatrix = event.payload.matrix;
+
+          // Ensure we received 16 elements
+          if (flatMatrix && flatMatrix.length === 16) {
+             // Reshape the flat 16-element array into a 3x4 matrix (number[][])
+             // Assuming row-major order as sent from webUpdater.ts
+             const matrix3x4: number[][] = [
+               [flatMatrix[0], flatMatrix[1], flatMatrix[2], flatMatrix[3]],
+               [flatMatrix[4], flatMatrix[5], flatMatrix[6], flatMatrix[7]],
+               [flatMatrix[8], flatMatrix[9], flatMatrix[10], flatMatrix[11]],
+             ];
+            // Call the function to update the frontend's XR device pose
+            setXRDeviceTransform(matrix3x4);
+          } else {
+            console.error('Received invalid matrix data in transform-update event:', event.payload);
+          }
+        });
+        console.log("[IPC Provider] Listening for 'transform-update' events from Rust.");
+      } catch (error) {
+        console.error("Failed to set up transform-update listener:", error);
+        setStatus('Error Listening for Transforms');
+      }
+    };
+
+    setupListener();
+
+    // Cleanup function
+    return () => {
+      if (unlistenTransform) {
+        unlistenTransform();
+        console.log("[IPC Provider] Unlistened from 'transform-update' events.");
+      }
+    };
+  }, []); // Empty dependency array ensures this runs only once on mount
+
   return (
     <IpcContext.Provider value={{ status, setStatus, sendFrame }}>
       {children}
@@ -91,6 +140,11 @@ export const useIpc = () => {
 };
 
 function setXRDeviceTransform(matrix: number[][]) {
+  // Check if the input is a 3x4 matrix
+  if (!matrix || matrix.length !== 3 || matrix.some(row => row.length !== 4)) {
+    console.error("setXRDeviceTransform received invalid matrix format. Expected 3x4 number[][].", matrix);
+    throw new Error("Invalid matrix format provided to setXRDeviceTransform.");
+  }
   try {
     const position = {
       x: matrix[0][3],

@@ -11,7 +11,7 @@ use std::{
     sync::Arc,
     time::Duration, 
 };
-use tauri::State;
+use tauri::{AppHandle, Emitter, State}; 
 // --- Tokio Imports ---
 use tokio::{
     net::windows::named_pipe::{ClientOptions, NamedPipeClient}, 
@@ -20,6 +20,7 @@ use tokio::{
     sync::Mutex as TokioMutex, 
     time::sleep,
 };
+use serde::Serialize; // Add Serialize
 
 // --- Define the state struct to hold the pipe connection ---
 // Frame pipe state (now asynchronous)
@@ -29,6 +30,12 @@ pub struct FramePipeState {
     pipe_writer: Arc<TokioMutex<Option<tokio::io::WriteHalf<NamedPipeClient>>>>,
     // Use a handle to the Tokio runtime
     rt: tokio::runtime::Handle,
+}
+
+// --- Define Payload Struct ---
+#[derive(Clone, Serialize)]
+struct TransformUpdatePayload {
+    matrix: Vec<f32>, // The 16-element flat matrix
 }
 
 // --- Constants ---
@@ -130,15 +137,15 @@ async fn send_frame_data(
 }
 
 // --- Transform Pipe Listener (ensure retry logic is similar) ---
-async fn transform_pipe_listener() {
+async fn transform_pipe_listener(app_handle: AppHandle) { // Add app_handle parameter
     loop {
         println!("[Rust Transform Pipe] Attempting to connect to transform pipe: {}", TRANSFORM_PIPE_PATH);
         match ClientOptions::new().open(TRANSFORM_PIPE_PATH) {
             Ok(client) => {
                 println!("[Rust Transform Pipe] Successfully connected.");
                 let mut reader = BufReader::new(client);
-                // Pass the reader to a handler function
-                handle_transform_connection(&mut reader).await;
+                // Pass the reader and app_handle to the handler function
+                handle_transform_connection(&mut reader, app_handle.clone()).await; // Pass app_handle
                 // If handle_transform_connection returns, it means the client disconnected
                 println!("[Rust Transform Pipe] Client disconnected. Attempting to reconnect...");
             }
@@ -152,15 +159,21 @@ async fn transform_pipe_listener() {
 }
 
 // --- Handle Transform Data --- Reads until disconnection or error
-async fn handle_transform_connection<R: AsyncReadExt + Unpin>(reader: &mut R) {
+async fn handle_transform_connection<R: AsyncReadExt + Unpin>(reader: &mut R, app_handle: AppHandle) { // Add app_handle parameter
     let mut buffer = [0u8; TRANSFORM_DATA_SIZE];
     loop {
         match reader.read_exact(&mut buffer).await {
             Ok(n) if n == TRANSFORM_DATA_SIZE => {
                 // --- Process the received transform data ---
                 let matrix = deserialize_matrix(&buffer);
-                // TODO: Implement actual logic with the matrix
-                println!("[Rust Transform Pipe] Received Matrix: {:?}", matrix);
+                // println!("[Rust Transform Pipe] Received Matrix: {:?}", matrix); // Keep this for debugging if needed
+
+                // --- Emit event to frontend --- 
+                let payload = TransformUpdatePayload { matrix };
+                if let Err(e) = app_handle.emit("transform-update", payload) {
+                     eprintln!("[Rust Transform Pipe] Error emitting transform-update event: {}", e);
+                }
+                // --- End Emit ---
 
                 // Example: Call a function to update XR state
                 // update_xr_transform(matrix);
@@ -206,28 +219,22 @@ async fn handle_transform_connection<R: AsyncReadExt + Unpin>(reader: &mut R) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Create a Tokio runtime
-    let rt = Runtime::new().unwrap();
-    let rt_handle = rt.handle().clone(); // Get a handle to the runtime
+    let rt = Runtime::new().expect("Failed to create Tokio runtime.");
+    // Get a handle to the runtime
+    let rt_handle = rt.handle().clone();
 
     tauri::Builder::default()
-        // Manage the FramePipeState and pass the runtime handle
-        .manage(FramePipeState::new(rt_handle.clone())) // Pass handle here
+        .manage(FramePipeState::new(rt_handle.clone())) // Clone the handle here
+        .invoke_handler(tauri::generate_handler![send_frame_data]) // Keep only send_frame_data for now
         .setup(move |app| {
             // Spawn the transform pipe listener using the runtime handle
-            let _app_handle = app.handle().clone(); // Use app handle if needed for events
+            let app_handle = app.handle().clone(); // Use app handle if needed for events
             let transform_rt_handle = rt_handle.clone(); // Clone handle for transform task
              transform_rt_handle.spawn(async move {
-                 transform_pipe_listener().await;
-             });
-
-            // Frame pipe connection loop is now spawned within FramePipeState::new
-
+                 transform_pipe_listener(app_handle).await;
+            });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            send_frame_data,
-            // Add any other existing commands here
-        ])
-        .run(tauri::generate_context!()) // Ensure Cargo.toml has build metadata enabled
+        .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
