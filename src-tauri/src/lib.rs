@@ -158,10 +158,9 @@ async fn handle_transform_connection<R: AsyncReadExt + Unpin>(reader: &mut R) {
         match reader.read_exact(&mut buffer).await {
             Ok(n) if n == TRANSFORM_DATA_SIZE => {
                 // --- Process the received transform data ---
-                let _matrix = deserialize_matrix(&buffer);
+                let matrix = deserialize_matrix(&buffer);
                 // TODO: Implement actual logic with the matrix
-                // For now, just print it (disabled for less noise)
-                // println!("[Rust Transform Pipe] Received Matrix: {:?}", matrix);
+                println!("[Rust Transform Pipe] Received Matrix: {:?}", matrix);
 
                 // Example: Call a function to update XR state
                 // update_xr_transform(matrix);
