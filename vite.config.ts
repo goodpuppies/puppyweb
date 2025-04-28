@@ -1,21 +1,15 @@
-import { defineConfig, Plugin } from "vite";
+import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 // @ts-expect-error process is a nodejs global
 // deno-lint-ignore no-process-global
 const host = process.env.TAURI_DEV_HOST;
 
-const fullReloadAlways: Plugin = {
-  name: 'full-reload',
-  handleHotUpdate({ server }) {
-    server.ws.send({ type: "full-reload" });
-    return [];
-  },
-};
+
 
 // https://vitejs.dev/config/
 export default defineConfig(() => ({
-  plugins: [react(), fullReloadAlways],
+  plugins: [react()],
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
